@@ -1,0 +1,8 @@
+{
+  "name": "ClassConnect",
+  "description": "Connect with your classmates — manage college subjects, assignments, grades, and curriculum.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

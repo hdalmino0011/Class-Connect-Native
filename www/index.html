@@ -1,0 +1,1830 @@
+<!DOCTYPE html>
+<html lang="en" data-font-size="medium">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>ClassConnect</title>
+  <meta name="description" content="Connect with your classmates — manage college subjects, assignments, grades, and curriculum.">
+  <meta name="theme-color" content="#0F172A">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="format-detection" content="telephone=no">
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="logo.png">
+  <link rel="icon" type="image/png" href="logo.png">
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <!-- Supabase SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ==================== GLOBAL LOADING OVERLAY ==================== -->
+<div id="global-loading-overlay" class="global-loading-overlay" aria-hidden="true">
+  <div class="global-loading-spinner" role="status" aria-live="polite">
+    <div class="spinner-ring-outer"></div>
+    <div class="spinner-ring-inner"></div>
+    <div class="spinner-core-icon">
+      <i class="fas fa-graduation-cap"></i>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE 1: SPLASH SCREEN ==================== -->
+<section id="splash-page" class="page active-page" aria-label="Loading">
+  <div class="splash-content">
+    <div class="splash-logo">
+      <img src="logo.png" alt="ClassConnect Logo" class="app-logo-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';">
+      <i class="fas fa-graduation-cap" style="font-size: 48px; color: white; display: none;"></i>
+    </div>
+    <h1 class="splash-title">ClassConnect</h1>
+    <div class="loading-dots" aria-label="Loading">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+  </div>
+  <footer class="splash-footer">HDDev &bull; All Rights Reserved 2026</footer>
+</section>
+
+<!-- ==================== PAGE 2: LOGIN / SIGNUP ==================== -->
+<section id="login-page" class="page" aria-label="Authentication">
+  <div class="auth-wrapper">
+    <div class="auth-card">
+
+      <div class="auth-logo" aria-hidden="true">
+        <img src="logo.png" alt="ClassConnect Logo" class="app-logo-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';">
+        <i class="fas fa-graduation-cap" style="display: none;"></i>
+      </div>
+
+      <!-- LOGIN FORM -->
+      <form id="login-form" class="auth-form active-form" novalidate autocomplete="on">
+        <h2 class="auth-title">Welcome Back</h2>
+        <p class="auth-subtitle">Log in to continue to ClassConnect</p>
+
+        <div id="login-error" class="form-error" hidden></div>
+
+        <div class="input-group">
+          <i class="fas fa-envelope input-icon" aria-hidden="true"></i>
+          <input
+            type="email"
+            id="login-email"
+            placeholder="Email address"
+            required
+            autocomplete="email"
+            inputmode="email"
+            spellcheck="false"
+          >
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-lock input-icon" aria-hidden="true"></i>
+          <input
+            type="password"
+            id="login-password"
+            placeholder="Password"
+            required
+            autocomplete="current-password"
+          >
+          <button type="button" class="toggle-password" data-target="login-password" aria-label="Toggle password visibility">
+            <i class="fas fa-eye"></i>
+          </button>
+        </div>
+
+        <a href="#" class="forgot-link">Forgot Password?</a>
+
+        <button type="submit" class="btn-primary" id="login-submit-btn">
+          <span class="btn-text">Log In</span>
+        </button>
+
+        <p class="switch-form-text">
+          Don't have an account?
+          <a href="#" id="show-signup">Sign Up</a>
+        </p>
+      </form>
+
+      <!-- SIGNUP FORM -->
+      <form id="signup-form" class="auth-form" novalidate autocomplete="on">
+        <h2 class="auth-title">Create Account</h2>
+        <p class="auth-subtitle">Join your classmates on ClassConnect</p>
+
+        <div id="signup-error" class="form-error" hidden></div>
+
+        <div class="input-group">
+          <i class="fas fa-user input-icon" aria-hidden="true"></i>
+          <input
+            type="text"
+            id="signup-name"
+            placeholder="Full Name"
+            required
+            autocomplete="name"
+            spellcheck="false"
+          >
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-envelope input-icon" aria-hidden="true"></i>
+          <input
+            type="email"
+            id="signup-email"
+            placeholder="Email address"
+            required
+            autocomplete="email"
+            inputmode="email"
+            spellcheck="false"
+          >
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-id-card input-icon" aria-hidden="true"></i>
+          <input
+            type="text"
+            id="signup-student-id"
+            placeholder="Student ID (e.g. 2023-12345)"
+            required
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-graduation-cap input-icon" aria-hidden="true"></i>
+          <select id="signup-year" required>
+            <option value="" disabled selected>Year Level</option>
+            <option value="1st Year">1st Year</option>
+            <option value="2nd Year">2nd Year</option>
+            <option value="3rd Year">3rd Year</option>
+            <option value="4th Year">4th Year</option>
+            <option value="5th Year">5th Year</option>
+          </select>
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-users input-icon" aria-hidden="true"></i>
+          <input
+            type="text"
+            id="signup-section"
+            placeholder="Section (e.g. BSIT 3-A)"
+            required
+            autocomplete="off"
+            spellcheck="false"
+          >
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-lock input-icon" aria-hidden="true"></i>
+          <input
+            type="password"
+            id="signup-password"
+            placeholder="Password (min 6 characters)"
+            required
+            autocomplete="new-password"
+            minlength="6"
+          >
+          <button type="button" class="toggle-password" data-target="signup-password" aria-label="Toggle password visibility">
+            <i class="fas fa-eye"></i>
+          </button>
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-lock input-icon" aria-hidden="true"></i>
+          <input
+            type="password"
+            id="signup-confirm"
+            placeholder="Confirm Password"
+            required
+            autocomplete="new-password"
+          >
+          <button type="button" class="toggle-password" data-target="signup-confirm" aria-label="Toggle password visibility">
+            <i class="fas fa-eye"></i>
+          </button>
+        </div>
+
+        <button type="submit" class="btn-primary" id="signup-submit-btn">
+          <span class="btn-text">Sign Up</span>
+        </button>
+
+        <p class="switch-form-text">
+          Already have an account?
+          <a href="#" id="show-login">Log In</a>
+        </p>
+      </form>
+
+    </div>
+  </div>
+</section>
+
+<!-- ==================== PAGE 3: DASHBOARD ==================== -->
+<section id="dashboard-page" class="page" aria-label="Dashboard">
+
+  <!-- TOP NAV -->
+  <header class="dashboard-topnav">
+    <div class="topnav-left">
+      <button id="hamburger-btn" class="hamburger-btn" aria-label="Open menu">
+        <i class="fas fa-bars"></i>
+      </button>
+      <div class="topnav-brand">
+        <img src="logo.png" alt="ClassConnect Logo" class="topnav-logo-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';">
+        <i class="fas fa-graduation-cap" aria-hidden="true" style="display: none;"></i>
+        <span>ClassConnect</span>
+      </div>
+    </div>
+    <div class="topnav-right">
+      <span class="welcome-text">Welcome, <strong id="dash-user-name">Student</strong></span>
+      <button id="topnav-notification-btn" class="btn-topnav-notif" aria-label="Open Notifications" title="Notifications">
+        <i class="fas fa-bell"></i>
+        <span id="topnav-notif-badge" class="topnav-notif-badge" style="display:none;">0</span>
+      </button>
+      <button id="logout-btn" class="btn-logout" aria-label="Log out">
+        <i class="fas fa-right-from-bracket"></i>
+        <span class="logout-label">Logout</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- SIDE DRAWER -->
+  <div id="side-drawer-overlay" class="drawer-overlay" aria-hidden="true">
+    <aside id="side-drawer" class="side-drawer" role="navigation" aria-label="Main navigation">
+      <div class="drawer-header">
+        <div class="drawer-avatar" id="drawer-avatar">S</div>
+        <div class="drawer-user-info">
+          <span class="drawer-name" id="drawer-name">Student</span>
+          <span class="drawer-email" id="drawer-email">student@email.com</span>
+        </div>
+        <button id="drawer-close-btn" class="drawer-close" aria-label="Close menu">
+          <i class="fas fa-xmark"></i>
+        </button>
+      </div>
+
+      <nav class="drawer-nav">
+        <button class="drawer-item" data-view="view-home">
+          <i class="fas fa-house"></i> Dashboard
+        </button>
+        <button class="drawer-item" data-view="view-subjects">
+          <i class="fas fa-book"></i> Subjects
+        </button>
+        <button class="drawer-item" data-view="view-schedule">
+          <i class="fas fa-calendar-days"></i> Schedule
+        </button>
+        <button class="drawer-item" data-view="view-assignments">
+          <i class="fas fa-clipboard-list"></i> Assignments
+        </button>
+        <button class="drawer-item" data-view="view-grades">
+          <i class="fas fa-chart-simple"></i> Grades
+        </button>
+        <button class="drawer-item" data-view="view-classmates">
+          <i class="fas fa-users"></i> Classmates
+        </button>
+        <div class="drawer-divider"></div>
+        <button class="drawer-item" data-view="view-curriculum">
+          <i class="fas fa-file-pdf"></i> Curriculum
+        </button>
+        <button class="drawer-item" data-view="view-files">
+          <i class="fas fa-folder-open"></i> School Files
+        </button>
+        <button class="drawer-item" data-view="view-profile">
+          <i class="fas fa-user"></i> Profile
+        </button>
+        <button class="drawer-item" data-view="view-faqs">
+          <i class="fas fa-circle-question"></i> FAQs
+        </button>
+        <button class="drawer-item" data-view="view-about">
+          <i class="fas fa-info-circle"></i> About
+        </button>
+        <button class="drawer-item" data-view="view-policy">
+          <i class="fas fa-file-lines"></i> Policy
+        </button>
+        <button class="drawer-item" data-view="view-settings">
+          <i class="fas fa-gear"></i> Settings
+        </button>
+        <button class="drawer-item" data-view="view-support">
+          <span class="drawer-heart-icon" aria-hidden="true"></span> Support HDDev
+        </button>
+        <div class="drawer-divider"></div>
+        <button class="drawer-item drawer-clear-cache" id="drawer-clear-cache-btn">
+          <i class="fas fa-rotate"></i> Clear Cache
+        </button>
+        <button class="drawer-item drawer-logout" id="drawer-logout-btn">
+          <i class="fas fa-right-from-bracket"></i> Logout
+        </button>
+      </nav>
+
+      <div class="drawer-footer">HDDev &bull; v1.0.0</div>
+    </aside>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <main class="dashboard-main">
+
+    <!-- ===== VIEW: HOME / DASHBOARD ===== -->
+    <div id="view-home" class="dashboard-view active-view">
+
+      <!-- DASHBOARD SEARCH BAR -->
+      <div class="dashboard-search-wrap">
+        <i class="fas fa-search dashboard-search-icon"></i>
+        <input
+          type="text"
+          id="dashboard-search-input"
+          class="dashboard-search-input"
+          placeholder="Search announcements, authors, tags, dates..."
+          aria-label="Search dashboard"
+        >
+      </div>
+
+      <div class="create-post-card">
+        <div class="create-post-row">
+          <div class="avatar-circle" id="composer-avatar">S</div>
+          <button id="open-composer-btn" class="composer-fake-input" type="button">
+            What's happening in class?
+          </button>
+        </div>
+      </div>
+
+      <div id="posts-feed" class="posts-feed">
+        <!-- posts rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: SUBJECTS ===== -->
+    <div id="view-subjects" class="dashboard-view">
+      <div class="view-header">
+        <h2 class="view-heading"><i class="fas fa-book"></i> My Subjects</h2>
+        <div class="view-header-actions">
+          <button id="add-subject-btn" class="btn-add" type="button">
+            <i class="fas fa-plus"></i> Add Subject
+          </button>
+        </div>
+      </div>
+      <div class="curriculum-filters subjects-filter-bar">
+        <button class="subject-year-filter active" data-year="all">All Years</button>
+        <button class="subject-year-filter" data-year="1st Year">1st Year</button>
+        <button class="subject-year-filter" data-year="2nd Year">2nd Year</button>
+        <button class="subject-year-filter" data-year="3rd Year">3rd Year</button>
+        <button class="subject-year-filter" data-year="4th Year">4th Year</button>
+        <button class="subject-year-filter" data-year="5th Year">5th Year</button>
+        <select id="subjects-semester-filter" class="curriculum-semester-filter" aria-label="Filter by Semester">
+          <option value="all">All Semesters</option>
+          <option value="1st Semester">1st Semester</option>
+          <option value="2nd Semester">2nd Semester</option>
+          <option value="Summer / Midyear">Summer / Midyear</option>
+        </select>
+      </div>
+      <div id="subjects-list" class="subjects-list">
+        <!-- subjects rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: SCHEDULE ===== -->
+    <div id="view-schedule" class="dashboard-view">
+      <div class="view-header">
+        <h2 class="view-heading"><i class="fas fa-calendar-days"></i> My Schedule</h2>
+        <div class="view-header-actions">
+          <button id="add-schedule-btn" class="btn-add" type="button">
+            <i class="fas fa-plus"></i> Add Schedule
+          </button>
+        </div>
+      </div>
+      <div class="curriculum-filters schedule-filter-bar">
+        <button class="schedule-year-filter active" data-year="all">All Years</button>
+        <button class="schedule-year-filter" data-year="1st Year">1st Year</button>
+        <button class="schedule-year-filter" data-year="2nd Year">2nd Year</button>
+        <button class="schedule-year-filter" data-year="3rd Year">3rd Year</button>
+        <button class="schedule-year-filter" data-year="4th Year">4th Year</button>
+        <button class="schedule-year-filter" data-year="5th Year">5th Year</button>
+        <select id="schedule-semester-filter" class="curriculum-semester-filter" aria-label="Filter by Semester">
+          <option value="all">All Semesters</option>
+          <option value="1st Semester">1st Semester</option>
+          <option value="2nd Semester">2nd Semester</option>
+          <option value="Summer / Midyear">Summer / Midyear</option>
+        </select>
+      </div>
+      <div id="schedule-list" class="schedule-list">
+        <!-- schedule rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: ASSIGNMENTS ===== -->
+    <div id="view-assignments" class="dashboard-view">
+      <div class="view-header">
+        <h2 class="view-heading"><i class="fas fa-clipboard-list"></i> Assignments</h2>
+        <button id="add-assignment-btn" class="btn-add" type="button">
+          <i class="fas fa-plus"></i> Add Task
+        </button>
+      </div>
+      <div id="assignments-list" class="assignments-list">
+        <!-- assignments rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: GRADES ===== -->
+    <div id="view-grades" class="dashboard-view">
+      <div class="view-header">
+        <h2 class="view-heading"><i class="fas fa-chart-simple"></i> College Grades</h2>
+        <button id="add-grade-btn" class="btn-add" type="button">
+          <i class="fas fa-plus"></i> Add Grade
+        </button>
+      </div>
+      <div class="grades-controls">
+        <div class="grade-filter">
+          <label for="grade-year-filter">Year Level</label>
+          <select id="grade-year-filter">
+            <option value="all">All Years</option>
+            <option value="1st Year">1st Year</option>
+            <option value="2nd Year">2nd Year</option>
+            <option value="3rd Year" selected>3rd Year</option>
+            <option value="4th Year">4th Year</option>
+            <option value="5th Year">5th Year</option>
+          </select>
+        </div>
+        <div class="grade-filter">
+          <label for="grade-semester-filter">Semester / Term</label>
+          <select id="grade-semester-filter">
+            <option value="all">All Semesters</option>
+            <option value="1st Semester" selected>1st Semester</option>
+            <option value="2nd Semester">2nd Semester</option>
+            <option value="Summer / Midyear">Summer / Midyear</option>
+          </select>
+        </div>
+      </div>
+      <div id="grades-list" class="grades-list">
+        <!-- grades rendered by script.js -->
+      </div>
+      <div class="gwa-display" id="gwa-display">
+        <div class="gwa-label-wrap">
+          <span>General Weighted Average (GWA)</span>
+          <small>Weighted by course units/credits</small>
+        </div>
+        <strong id="gwa-value">0.00</strong>
+      </div>
+    </div>
+
+    <!-- ===== VIEW: CLASSMATES ===== -->
+    <div id="view-classmates" class="dashboard-view">
+      <div class="view-header">
+        <h2 class="view-heading"><i class="fas fa-users"></i> Classmates</h2>
+      </div>
+      <div id="my-section-display" class="classmate-section-badge">
+        Your Section: BSIT 3-A
+      </div>
+      <div id="classmates-list" class="classmates-list">
+        <!-- classmates rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: CURRICULUM ===== -->
+    <div id="view-curriculum" class="dashboard-view">
+      <div class="view-header curriculum-header">
+        <h2 class="view-heading"><i class="fas fa-file-pdf"></i> College Curriculum</h2>
+        <div class="view-header-actions">
+          <button id="add-curriculum-subject-btn" class="btn-add" type="button">
+            <i class="fas fa-plus"></i> Add Subject
+          </button>
+          <button id="upload-curriculum-pdf-btn" class="btn-add btn-upload-curriculum" type="button">
+            <i class="fas fa-upload"></i> Upload PDF
+          </button>
+        </div>
+      </div>
+
+      <!-- PDF Upload Section -->
+      <div id="curriculum-pdf-section" class="curriculum-pdf-section">
+        <!-- rendered by script.js -->
+      </div>
+
+      <!-- Certificate of Registration (COR) Section -->
+      <div id="cor-pdf-section" class="cor-pdf-section">
+        <!-- rendered by script.js -->
+      </div>
+
+      <!-- Year Level & Semester Filters -->
+      <div class="curriculum-filters">
+        <button class="curriculum-year-filter active" data-year="all">All Years</button>
+        <button class="curriculum-year-filter" data-year="1st Year">1st Year</button>
+        <button class="curriculum-year-filter" data-year="2nd Year">2nd Year</button>
+        <button class="curriculum-year-filter" data-year="3rd Year">3rd Year</button>
+        <button class="curriculum-year-filter" data-year="4th Year">4th Year</button>
+
+        <select id="curriculum-semester-filter" class="curriculum-semester-filter" aria-label="Select Semester">
+          <option value="all">All Semesters</option>
+          <option value="1st Semester">1st Semester</option>
+          <option value="2nd Semester">2nd Semester</option>
+          <option value="Summer / Midyear">Summer / Midyear</option>
+        </select>
+      </div>
+
+      <div id="curriculum-subjects-list" class="curriculum-subjects-list">
+        <!-- curriculum subjects rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: SCHOOL FILES & DOCUMENTS ===== -->
+    <div id="view-files" class="dashboard-view">
+      <div class="view-header files-view-header">
+        <div>
+          <h2 class="view-heading"><i class="fas fa-folder-open"></i> School Files &amp; Documents</h2>
+          <p class="view-subheading">Upload, organize, and preview school files in any format (PDF, Word, PPTX, Excel, Images, Code, and Notes).</p>
+        </div>
+        <div class="view-header-actions">
+          <button id="upload-school-file-btn" class="btn-add btn-upload-school-file" type="button">
+            <i class="fas fa-cloud-arrow-up"></i> Upload File
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Drag & Drop Zone -->
+      <div class="files-dropzone-card" id="files-quick-dropzone">
+        <input type="file" id="school-file-quick-input" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.webp,.gif,.zip,.rar" hidden>
+        <div class="dropzone-content">
+          <div class="dropzone-left">
+            <div class="dropzone-icon-wrap">
+              <i class="fas fa-cloud-arrow-up"></i>
+            </div>
+            <div class="dropzone-text">
+              <span class="dropzone-title">Drag &amp; drop school files here or <button type="button" class="dropzone-browse-link" id="files-browse-btn">browse your computer</button></span>
+              <span class="dropzone-hint">Supports PDF, Word, PowerPoint, Excel, Images, Notes, Code &amp; Archives up to 25 MB</span>
+            </div>
+          </div>
+          <div class="dropzone-right-actions">
+            <button type="button" class="btn-dropzone-action" id="files-quick-upload-trigger-btn">
+              <i class="fas fa-plus"></i> Select Files
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Files Filter Bar -->
+      <div class="files-filter-bar">
+        <div class="files-search-wrap">
+          <i class="fas fa-search files-search-icon"></i>
+          <input type="text" id="files-search-input" class="files-search-input" placeholder="Search files by name, subject, category..." aria-label="Search files">
+        </div>
+        <div class="files-category-filters" id="files-category-filters">
+          <button class="file-cat-filter active" data-cat="all">All Files</button>
+          <button class="file-cat-filter" data-cat="Notes"><i class="fas fa-note-sticky"></i> Notes</button>
+          <button class="file-cat-filter" data-cat="Reviewer"><i class="fas fa-book-bookmark"></i> Reviewers</button>
+          <button class="file-cat-filter" data-cat="Syllabus"><i class="fas fa-graduation-cap"></i> Syllabi</button>
+          <button class="file-cat-filter" data-cat="Assignment"><i class="fas fa-clipboard-list"></i> Assignments</button>
+          <button class="file-cat-filter" data-cat="Module"><i class="fas fa-book"></i> Modules</button>
+          <button class="file-cat-filter" data-cat="Project"><i class="fas fa-laptop-code"></i> Projects</button>
+          <button class="file-cat-filter" data-cat="Other">Others</button>
+        </div>
+      </div>
+
+      <div class="files-secondary-bar">
+        <div class="files-count-badge" id="files-count-badge">
+          <i class="fas fa-file"></i> <span>0 Files</span>
+        </div>
+        <div class="files-format-filter-wrap">
+          <select id="files-format-select" class="files-format-select" aria-label="Filter by format">
+            <option value="all">All Formats</option>
+            <option value="pdf">PDF Documents (.pdf)</option>
+            <option value="word">Word Documents (.doc, .docx)</option>
+            <option value="powerpoint">PowerPoint (.ppt, .pptx)</option>
+            <option value="excel">Excel (.xls, .xlsx, .csv)</option>
+            <option value="image">Images (.png, .jpg, .webp)</option>
+            <option value="text">Text &amp; Code (.txt, .md, .js)</option>
+            <option value="archive">Archives (.zip, .rar)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="school-files-list" class="school-files-grid">
+        <!-- files rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: PROFILE ===== -->
+    <div id="view-profile" class="dashboard-view">
+      <h2 class="view-heading"><i class="fas fa-user"></i> Profile</h2>
+      <form id="profile-form" class="profile-form" novalidate>
+
+        <div class="profile-photo-section">
+          <div class="profile-photo-wrapper" id="profile-photo-wrapper">
+            <div class="avatar-circle avatar-large" id="profile-avatar">S</div>
+            <button type="button" id="upload-photo-btn" class="photo-upload-btn" aria-label="Upload profile photo">
+              <i class="fas fa-camera"></i>
+            </button>
+            <input type="file" id="profile-photo-input" accept="image/*" hidden>
+          </div>
+          <p class="photo-hint">Tap the camera icon to upload a photo</p>
+        </div>
+
+        <div class="profile-fields">
+          <div class="form-group">
+            <label for="profile-fullname">Full Name</label>
+            <input type="text" id="profile-fullname" placeholder="Your full name" autocomplete="name">
+          </div>
+          <div class="form-group">
+            <label for="profile-email">Email Address</label>
+            <input type="email" id="profile-email" placeholder="Your email" readonly>
+          </div>
+          <div class="form-group" style="grid-column: 1 / -1;">
+            <label for="profile-bio">Bio / About Me</label>
+            <textarea id="profile-bio" rows="3" placeholder="Tell us about yourself..."></textarea>
+          </div>
+          <div class="form-group">
+            <label for="profile-student-id">Student ID</label>
+            <input type="text" id="profile-student-id" placeholder="e.g. 2023-12345">
+          </div>
+          <div class="form-group">
+            <label for="profile-course">Course / Program</label>
+            <input type="text" id="profile-course" placeholder="e.g. BS Information Technology">
+          </div>
+          <div class="form-row" style="grid-column: 1 / -1;">
+            <div class="form-group">
+              <label for="profile-year">Year Level</label>
+              <select id="profile-year">
+                <option value="">Select</option>
+                <option value="1st Year">1st Year</option>
+                <option value="2nd Year">2nd Year</option>
+                <option value="3rd Year" selected>3rd Year</option>
+                <option value="4th Year">4th Year</option>
+                <option value="5th Year">5th Year</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="profile-section">Section (e.g. BSIT 3-A)</label>
+              <input type="text" id="profile-section" placeholder="e.g. BSIT 3-A" value="">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="profile-contact">Contact Number</label>
+            <input type="tel" id="profile-contact" placeholder="e.g. 0912-345-6789" inputmode="tel">
+          </div>
+          <div class="form-group">
+            <label for="profile-birthdate">Birthdate</label>
+            <input type="date" id="profile-birthdate">
+          </div>
+          <div class="form-group">
+            <label for="profile-gender">Gender</label>
+            <select id="profile-gender">
+              <option value="">Select</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+              <option value="Prefer not to say">Prefer not to say</option>
+            </select>
+          </div>
+          <div class="form-group" style="grid-column: 1 / -1;">
+            <label for="profile-address">Address</label>
+            <input type="text" id="profile-address" placeholder="Your home address">
+          </div>
+          <div class="form-group" style="grid-column: 1 / -1;">
+            <label for="profile-emergency">Emergency Contact</label>
+            <input type="text" id="profile-emergency" placeholder="Name and number">
+          </div>
+          <div class="form-group">
+            <label for="profile-guardian-name">Guardian Name</label>
+            <input type="text" id="profile-guardian-name" placeholder="Guardian's full name">
+          </div>
+          <div class="form-group">
+            <label for="profile-guardian-contact">Guardian Contact</label>
+            <input type="tel" id="profile-guardian-contact" placeholder="Guardian's contact number" inputmode="tel">
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary">
+          <i class="fas fa-check"></i> Save Profile
+        </button>
+      </form>
+    </div>
+
+    <!-- ===== VIEW: FAQs ===== -->
+    <div id="view-faqs" class="dashboard-view">
+      <h2 class="view-heading"><i class="fas fa-circle-question"></i> Frequently Asked Questions</h2>
+      <div class="faqs-list" id="faqs-list">
+        <!-- FAQs rendered by script.js -->
+      </div>
+    </div>
+
+    <!-- ===== VIEW: ABOUT ===== -->
+    <div id="view-about" class="dashboard-view">
+      <h2 class="view-heading"><i class="fas fa-info-circle"></i> About ClassConnect</h2>
+      <div class="about-card">
+        <div class="about-logo" aria-hidden="true">
+          <img src="logo.png" alt="ClassConnect Logo" class="app-logo-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';">
+          <i class="fas fa-graduation-cap" style="display: none;"></i>
+        </div>
+        <h3>ClassConnect</h3>
+        <p class="about-tagline">Connecting college students, one class at a time.</p>
+        <div class="about-divider"></div>
+        <p class="about-description">
+          ClassConnect was built by <strong>Hanz Dee Dalmino</strong>, a Bachelor of Science in Information Technology student in <strong>Cebu Technological University - Main Campus</strong>.
+          It is a comprehensive student management platform designed to help college students stay organized, collaborate with classmates, track General Weighted Average (GWA), and store official curriculum PDF syllabi all in one place.
+        </p>
+        <div class="about-divider"></div>
+        <div class="about-info-grid">
+          <div class="about-info-item">
+            <span class="about-label">Developer</span>
+            <span class="about-value">Hanz Dee Dalmino</span>
+          </div>
+          <div class="about-info-item">
+            <span class="about-label">Program</span>
+            <span class="about-value">BS Information Technology</span>
+          </div>
+          <div class="about-info-item">
+            <span class="about-label">University</span>
+            <span class="about-value">Cebu Technological University - Main Campus</span>
+          </div>
+          <div class="about-info-item">
+            <span class="about-label">Version</span>
+            <span class="about-value">v1.0.0</span>
+          </div>
+        </div>
+        <div class="about-divider"></div>
+        <p class="about-footer">
+          Built with dedication for students everywhere.<br>
+          <strong>HDDev &bull; All Rights Reserved 2026</strong>
+        </p>
+      </div>
+    </div>
+
+    <!-- ===== VIEW: POLICY ===== -->
+    <div id="view-policy" class="dashboard-view">
+      <h2 class="view-heading"><i class="fas fa-file-lines"></i> Privacy Policy &amp; Terms</h2>
+      <div class="policy-card">
+
+        <div class="policy-section">
+          <h3><i class="fas fa-shield-halved"></i> Privacy Policy</h3>
+          <p><strong>Last Updated:</strong> 2026</p>
+          <p>
+            ClassConnect respects your privacy and is committed to protecting your personal information.
+            This Privacy Policy explains how we collect, use, and safeguard your data when you use our platform.
+          </p>
+
+          <h4>Information We Collect</h4>
+          <ul>
+            <li>Name, email address, and section details</li>
+            <li>Academic information (subjects, grades, assignments)</li>
+            <li>Profile photo and bio (optional)</li>
+          </ul>
+
+          <h4>Data Storage</h4>
+          <p>
+            All your data — including your profile, subjects, assignments, grades, schedule, curriculum, and posts — is stored securely in <strong>Supabase</strong>, a cloud-hosted PostgreSQL database. Supabase enforces <strong>Row-Level Security (RLS)</strong> policies on every table, which means your authentication token is required to access your records. No other user can read or modify your data. The only item stored locally on your device is your font preference setting (saved in <code>localStorage</code>).
+          </p>
+        </div>
+
+        <div class="policy-divider"></div>
+
+        <div class="policy-section">
+          <h3><i class="fas fa-file-signature"></i> Terms of Service</h3>
+          <p>
+            By using ClassConnect, you agree to these Terms of Service. Always back up your academic information.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== VIEW: SETTINGS ===== -->
+    <div id="view-settings" class="dashboard-view">
+      <h2 class="view-heading"><i class="fas fa-gear"></i> Settings</h2>
+      <div class="settings-card">
+
+        <!-- DEVICE NOTIFICATIONS & REMINDERS -->
+        <div class="settings-section-title">
+          <i class="fas fa-bell"></i>
+          <span>Device Notifications & Reminders</span>
+        </div>
+
+        <!-- Notification Permission Status -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-mobile-screen-button"></i>
+            <div>
+              <span class="settings-label">Device Alert Status</span>
+              <span class="settings-desc" id="notif-permission-desc">Check browser & OS notification permission</span>
+            </div>
+          </div>
+          <div class="settings-notif-status-wrap">
+            <span id="notif-permission-badge" class="notif-status-badge notif-status-default">Checking...</span>
+            <button type="button" id="notif-request-perm-btn" class="btn-secondary btn-sm" style="display:none;">
+              Enable
+            </button>
+          </div>
+        </div>
+
+        <!-- Master Notification Toggle -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-toggle-on"></i>
+            <div>
+              <span class="settings-label">Enable All Notifications</span>
+              <span class="settings-desc">Allow ClassConnect to send alerts to this device</span>
+            </div>
+          </div>
+          <label class="cc-switch">
+            <input type="checkbox" id="notif-pref-master" checked>
+            <span class="cc-slider"></span>
+          </label>
+        </div>
+
+        <!-- Daily Schedule Digest Toggle -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-calendar-day"></i>
+            <div>
+              <span class="settings-label">Daily Subject Schedule</span>
+              <span class="settings-desc">Daily morning summary of your classes for the day</span>
+            </div>
+          </div>
+          <label class="cc-switch">
+            <input type="checkbox" id="notif-pref-schedule-daily" checked>
+            <span class="cc-slider"></span>
+          </label>
+        </div>
+
+        <!-- Upcoming Class Alert Toggle -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-clock"></i>
+            <div>
+              <span class="settings-label">Upcoming Class Reminders</span>
+              <span class="settings-desc">Alert 15–20 minutes before each scheduled class starts</span>
+            </div>
+          </div>
+          <label class="cc-switch">
+            <input type="checkbox" id="notif-pref-schedule-upcoming" checked>
+            <span class="cc-slider"></span>
+          </label>
+        </div>
+
+        <!-- Assignment & Task Due Dates -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-clipboard-list"></i>
+            <div>
+              <span class="settings-label">Tasks & Assignments Deadlines</span>
+              <span class="settings-desc">Alerts for tasks due today, due tomorrow, and overdue items</span>
+            </div>
+          </div>
+          <label class="cc-switch">
+            <input type="checkbox" id="notif-pref-assignments" checked>
+            <span class="cc-slider"></span>
+          </label>
+        </div>
+
+        <!-- Community Posts & Announcements -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-bullhorn"></i>
+            <div>
+              <span class="settings-label">Posts & Announcements</span>
+              <span class="settings-desc">Get notified when classmates or professors publish new posts</span>
+            </div>
+          </div>
+          <label class="cc-switch">
+            <input type="checkbox" id="notif-pref-posts" checked>
+            <span class="cc-slider"></span>
+          </label>
+        </div>
+
+        <!-- Vibration Feedback -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-mobile"></i>
+            <div>
+              <span class="settings-label">Device Vibration Feedback</span>
+              <span class="settings-desc">Haptic feedback on mobile phones during alerts & task actions</span>
+            </div>
+          </div>
+          <label class="cc-switch">
+            <input type="checkbox" id="notif-pref-vibration" checked>
+            <span class="cc-slider"></span>
+          </label>
+        </div>
+
+        <!-- Audio Tone Chime -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-volume-high"></i>
+            <div>
+              <span class="settings-label">Notification Audio Chime</span>
+              <span class="settings-desc">Play a subtle harmonic tone when alerts appear</span>
+            </div>
+          </div>
+          <label class="cc-switch">
+            <input type="checkbox" id="notif-pref-sound" checked>
+            <span class="cc-slider"></span>
+          </label>
+        </div>
+
+        <!-- Test Notification Button -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-paper-plane"></i>
+            <div>
+              <span class="settings-label">Test Device Notification</span>
+              <span class="settings-desc">Trigger a test alert immediately on your phone or PC</span>
+            </div>
+          </div>
+          <button type="button" id="settings-test-notif-btn" class="btn-secondary">
+            <i class="fas fa-bell"></i> Send Test
+          </button>
+        </div>
+
+        <div class="settings-divider"></div>
+
+        <!-- GENERAL PREFERENCES -->
+        <div class="settings-section-title">
+          <i class="fas fa-sliders"></i>
+          <span>General Preferences</span>
+        </div>
+
+        <!-- Font Type -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-font"></i>
+            <div>
+              <span class="settings-label">Font Type</span>
+              <span class="settings-desc">Choose your preferred font family</span>
+            </div>
+          </div>
+          <select id="font-type-select" class="settings-select">
+            <option value="sans-serif" selected>Sans-Serif (Default)</option>
+            <option value="serif">Serif (Classic)</option>
+            <option value="monospace">Monospace (Code)</option>
+            <option value="rounded">Rounded (Modern)</option>
+          </select>
+        </div>
+
+        <!-- Change Password -->
+        <div class="settings-item settings-collapsible">
+          <div class="settings-item-left">
+            <i class="fas fa-key"></i>
+            <div>
+              <span class="settings-label">Change Password</span>
+              <span class="settings-desc">Update your account password</span>
+            </div>
+          </div>
+          <i class="fas fa-chevron-down settings-chevron" id="password-chevron"></i>
+        </div>
+        <div class="settings-group" id="password-group" style="display:none;">
+          <div class="form-group">
+            <label for="settings-current-password">Current Password</label>
+            <input type="password" id="settings-current-password" placeholder="Enter current password" autocomplete="current-password">
+          </div>
+          <div class="form-group">
+            <label for="settings-new-password">New Password</label>
+            <input type="password" id="settings-new-password" placeholder="Enter new password (min 6 chars)" autocomplete="new-password" minlength="6">
+          </div>
+          <div class="form-group">
+            <label for="settings-confirm-password">Confirm New Password</label>
+            <input type="password" id="settings-confirm-password" placeholder="Confirm new password" autocomplete="new-password">
+          </div>
+          <button type="button" id="settings-change-password-btn" class="btn-secondary">
+            <i class="fas fa-check"></i> Update Password
+          </button>
+        </div>
+
+        <!-- Clear Data -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-trash-can"></i>
+            <div>
+              <span class="settings-label">Clear All Data</span>
+              <span class="settings-desc">Delete all your data from the app</span>
+            </div>
+          </div>
+          <button type="button" id="settings-clear-data-btn" class="btn-danger">Clear</button>
+        </div>
+
+        <!-- Export Data -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-file-export"></i>
+            <div>
+              <span class="settings-label">Export Data</span>
+              <span class="settings-desc">Download your data as a JSON file</span>
+            </div>
+          </div>
+          <button type="button" id="settings-export-btn" class="btn-secondary">Export</button>
+        </div>
+
+        <!-- Import Data -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-file-import"></i>
+            <div>
+              <span class="settings-label">Import Data</span>
+              <span class="settings-desc">Restore data from a backup file</span>
+            </div>
+          </div>
+          <button type="button" id="settings-import-btn" class="btn-secondary">Import</button>
+          <input type="file" id="settings-import-input" accept=".json" hidden>
+        </div>
+
+        <!-- App Version -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-circle-info"></i>
+            <div>
+              <span class="settings-label">App Version</span>
+              <span class="settings-desc">Current version of ClassConnect</span>
+            </div>
+          </div>
+          <span class="settings-version">v1.0.0</span>
+        </div>
+
+        <!-- Storage Used -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-database"></i>
+            <div>
+              <span class="settings-label">Storage Used</span>
+              <span class="settings-desc">Local storage usage</span>
+            </div>
+          </div>
+          <span class="settings-version" id="settings-storage">0 KB</span>
+        </div>
+
+        <!-- About Link -->
+        <div class="settings-item settings-link" onclick="navigateTo('view-about')">
+          <div class="settings-item-left">
+            <i class="fas fa-info-circle"></i>
+            <div>
+              <span class="settings-label">About ClassConnect</span>
+              <span class="settings-desc">Learn more about the app</span>
+            </div>
+          </div>
+          <i class="fas fa-chevron-right"></i>
+        </div>
+
+        <!-- Delete Account -->
+        <div class="settings-item settings-delete-account" id="settings-delete-account-btn">
+          <div class="settings-item-left">
+            <i class="fas fa-user-xmark"></i>
+            <div>
+              <span class="settings-label">Delete Account</span>
+              <span class="settings-desc">Permanently delete your account and all data</span>
+            </div>
+          </div>
+          <i class="fas fa-chevron-right"></i>
+        </div>
+
+        <!-- Logout -->
+        <div class="settings-item settings-logout" id="settings-logout-btn">
+          <div class="settings-item-left">
+            <i class="fas fa-right-from-bracket"></i>
+            <div>
+              <span class="settings-label">Logout</span>
+              <span class="settings-desc">Sign out of your account</span>
+            </div>
+          </div>
+          <i class="fas fa-chevron-right"></i>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ==================== VIEW: SUPPORT HDDEV ==================== -->
+    <div id="view-support" class="dashboard-view">
+      <h2 class="view-heading"><span class="support-heart-icon" aria-hidden="true"></span> Support HDDev</h2>
+      <div class="support-intro">
+        <p>Hi! I'm <strong>HDDev</strong>, the developer behind ClassConnect. Building and maintaining
+           this app takes real time and effort. If it's been useful to you, even a small contribution
+           means a lot, it helps the app running, updated, and free for everyone. Thank you! <i class="fas fa-heart text-blue-500"></i></p>
+      </div>
+      <div class="support-qr-grid">
+
+        <!-- GCash -->
+        <div class="support-qr-card">
+          <img src="gcashQR.jpg" alt="GCash QR Code" class="support-qr-img support-qr-zoomable">
+          <div class="support-qr-info">
+            <span class="support-qr-service">GCash</span>
+            <span class="support-qr-name">Hanz Dee Lisondra Dalmino</span>
+            <span class="support-qr-number">09454332616</span>
+          </div>
+        </div>
+
+        <!-- GoTyme -->
+        <div class="support-qr-card">
+          <img src="gotymeQR.jpg" alt="GoTyme QR Code" class="support-qr-img support-qr-zoomable">
+          <div class="support-qr-info">
+            <span class="support-qr-service">GoTyme Bank</span>
+            <span class="support-qr-name">Hanz Dee Lisondra Dalmino</span>
+          </div>
+        </div>
+
+        <!-- Maribank -->
+        <div class="support-qr-card">
+          <img src="maribankQR.jpg" alt="Maribank QR Code" class="support-qr-img support-qr-zoomable">
+          <div class="support-qr-info">
+            <span class="support-qr-service">Maribank</span>
+            <span class="support-qr-name">Hanz Dee Lisondra Dalmino</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- ===== NEW: RESET PASSWORD (SECRET PAGE) ===== -->
+    <!-- This view is hidden by default and only shown when a reset_token is detected -->
+    <!-- ================================================================ -->
+    <div id="view-reset-password" class="dashboard-view" style="display:none;">
+      <div style="max-width: 420px; margin: 40px auto; background: #ffffff; border-radius: 16px; padding: 32px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+        <h2 style="font-size: 24px; font-weight: 700; color: #0F172A; text-align: center; margin-bottom: 8px;">
+          <i class="fas fa-key" style="color: #2563EB;"></i> Set New Password
+        </h2>
+        <p style="text-align: center; color: #64748B; font-size: 14px; margin-bottom: 20px;">
+          Enter your new password below.
+        </p>
+
+        <form id="reset-password-form-view" novalidate>
+          <div id="reset-error-view" class="form-error" hidden></div>
+          <div id="reset-success-view" class="form-success" hidden></div>
+
+          <div class="form-group">
+            <label for="reset-new-password-view">New Password (min 6 characters)</label>
+            <input type="password" id="reset-new-password-view" placeholder="Enter new password" required minlength="6" autocomplete="new-password">
+          </div>
+          <div class="form-group">
+            <label for="reset-confirm-password-view">Confirm Password</label>
+            <input type="password" id="reset-confirm-password-view" placeholder="Confirm new password" required autocomplete="new-password">
+          </div>
+          <input type="hidden" id="reset-token-field-view">
+
+          <button type="submit" class="btn-primary" id="reset-submit-btn-view">
+            <i class="fas fa-check"></i> Update Password
+          </button>
+
+          <p style="text-align:center;font-size:13px;margin-top:12px;">
+            <a href="#" id="reset-back-to-login-view">Back to Login</a>
+          </p>
+        </form>
+      </div>
+    </div>
+    <!-- ===== END RESET PASSWORD VIEW ===== -->
+
+  </main>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav" aria-label="Quick navigation">
+    <button class="nav-item active-nav" data-view="view-home" aria-label="Dashboard">
+      <i class="fas fa-house"></i>
+      <span>Home</span>
+    </button>
+    <button class="nav-item" data-view="view-subjects" aria-label="Subjects">
+      <i class="fas fa-book"></i>
+      <span>Subjects</span>
+    </button>
+    <button class="nav-item" data-view="view-profile" aria-label="Profile">
+      <i class="fas fa-user"></i>
+      <span>Profile</span>
+    </button>
+  </nav>
+
+</section>
+
+<!-- ==================== MODALS ==================== -->
+
+<!-- NOTIFICATION CENTER MODAL -->
+<div id="notification-center-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card notification-center-modal" role="dialog" aria-modal="true" aria-labelledby="notif-center-title">
+    <div class="modal-header">
+      <div class="notif-center-header-title">
+        <h3 id="notif-center-title"><i class="fas fa-bell"></i> Notifications</h3>
+        <span id="notif-unread-count-pill" class="notif-unread-pill" style="display:none;">0 New</span>
+      </div>
+      <div class="notif-center-header-actions">
+        <button id="notif-mark-all-read-btn" class="btn-icon-text" type="button" title="Mark all as read">
+          <i class="fas fa-check-double"></i> <span>Mark Read</span>
+        </button>
+        <button id="notif-clear-all-btn" class="btn-icon-text" type="button" title="Clear all notifications">
+          <i class="fas fa-trash-can"></i> <span>Clear</span>
+        </button>
+        <button id="close-notification-modal-btn" class="modal-close" aria-label="Close">
+          <i class="fas fa-xmark"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Notification Filters -->
+    <div class="notif-filter-tabs">
+      <button class="notif-tab active" data-filter="all"><i class="fas fa-layer-group"></i> All</button>
+      <button class="notif-tab" data-filter="schedule"><i class="fas fa-calendar-alt"></i> Schedules</button>
+      <button class="notif-tab" data-filter="assignment"><i class="fas fa-clipboard-check"></i> Tasks</button>
+      <button class="notif-tab" data-filter="post"><i class="fas fa-bullhorn"></i> Posts</button>
+    </div>
+
+    <!-- Notification List Container -->
+    <div id="notification-items-list" class="notif-items-list">
+      <!-- Populated dynamically by script.js -->
+    </div>
+
+    <!-- Notification Modal Footer -->
+    <div class="notif-modal-footer">
+      <button type="button" id="notif-open-settings-btn" class="btn-notif-footer-link">
+        <i class="fas fa-gear"></i> Notification Settings
+      </button>
+      <button type="button" id="notif-modal-test-btn" class="btn-secondary btn-sm">
+        <i class="fas fa-paper-plane"></i> Test Device Alert
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- CLASSMATE PROFILE MODAL -->
+<div id="classmate-profile-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="cm-modal-title">
+    <div class="modal-header">
+      <h3 id="cm-modal-title"><i class="fas fa-user"></i> Classmate Profile</h3>
+      <button id="close-classmate-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <div class="cm-profile-box">
+      <div id="cm-modal-avatar" class="cm-profile-avatar">S</div>
+      <h3 id="cm-modal-name" style="font-size:20px;font-weight:800;color:var(--deep-navy);">Classmate Name</h3>
+      <div id="cm-modal-section" class="classmate-section-badge">Section: BSIT 3-A</div>
+
+      <div class="cm-profile-details">
+        <div class="cm-detail-item">
+          <span class="cm-detail-label">Program & Year:</span>
+          <span class="cm-detail-val" id="cm-modal-course-year">BSIT • 3rd Year</span>
+        </div>
+        <div class="cm-detail-item">
+          <span class="cm-detail-label">Email:</span>
+          <span class="cm-detail-val" id="cm-modal-email">student@ctu.edu.ph</span>
+        </div>
+        <div class="cm-detail-item">
+          <span class="cm-detail-label">Student ID:</span>
+          <span class="cm-detail-val" id="cm-modal-studentid">2023-12345</span>
+        </div>
+        <div class="cm-detail-item">
+          <span class="cm-detail-label">Contact Number:</span>
+          <span class="cm-detail-val" id="cm-modal-contact">0912-345-6789</span>
+        </div>
+        <div class="cm-detail-item" style="flex-direction:column;gap:4px;">
+          <span class="cm-detail-label">Bio:</span>
+          <span class="cm-detail-val" id="cm-modal-bio" style="text-align:left;font-weight:normal;">Bio text...</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE POST MODAL -->
+<div id="post-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="post-modal-heading">
+    <div class="modal-header">
+      <h3 id="post-modal-heading">Create Post</h3>
+      <button id="close-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+
+    <!-- Rich Text Toolbar -->
+    <div class="post-toolbar" role="toolbar" aria-label="Text formatting">
+      <button type="button" class="toolbar-btn" data-command="bold" title="Bold"><i class="fas fa-bold"></i></button>
+      <button type="button" class="toolbar-btn" data-command="italic" title="Italic"><i class="fas fa-italic"></i></button>
+      <button type="button" class="toolbar-btn" data-command="underline" title="Underline"><i class="fas fa-underline"></i></button>
+      <button type="button" class="toolbar-btn" data-command="strikeThrough" title="Strikethrough"><i class="fas fa-strikethrough"></i></button>
+      <span class="toolbar-divider"></span>
+      <select class="toolbar-font-select" id="post-font-select" aria-label="Font family">
+        <option value="sans-serif">Sans-Serif</option>
+        <option value="Georgia, serif">Georgia</option>
+        <option value="monospace">Monospace</option>
+      </select>
+      <span class="toolbar-divider"></span>
+      <button type="button" class="toolbar-btn" id="post-image-btn" title="Upload Image"><i class="fas fa-image"></i></button>
+      <input type="file" id="post-image-input" accept="image/*" hidden>
+    </div>
+
+    <div class="post-content-wrapper">
+      <div
+        id="post-content-editable"
+        class="post-content-editable"
+        contenteditable="true"
+        role="textbox"
+        placeholder="Share an announcement or update with your classmates..."
+      ></div>
+    </div>
+
+    <div id="post-image-preview" class="post-image-preview" hidden>
+      <img id="post-preview-img" src="#" alt="Image preview">
+      <button type="button" id="post-remove-image-btn" class="remove-image-btn" aria-label="Remove image">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+
+    <button type="button" id="submit-post-btn" class="btn-primary">
+      <i class="fas fa-paper-plane"></i> Post
+    </button>
+  </div>
+</div>
+
+<!-- EDIT POST MODAL -->
+<div id="edit-post-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="edit-post-modal-heading">
+    <div class="modal-header">
+      <h3 id="edit-post-modal-heading">Edit Post</h3>
+      <button id="close-edit-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+
+    <div class="post-toolbar" role="toolbar" aria-label="Text formatting">
+      <button type="button" class="toolbar-btn" data-command="bold" title="Bold"><i class="fas fa-bold"></i></button>
+      <button type="button" class="toolbar-btn" data-command="italic" title="Italic"><i class="fas fa-italic"></i></button>
+      <button type="button" class="toolbar-btn" data-command="underline" title="Underline"><i class="fas fa-underline"></i></button>
+      <button type="button" class="toolbar-btn" data-command="strikeThrough" title="Strikethrough"><i class="fas fa-strikethrough"></i></button>
+      <span class="toolbar-divider"></span>
+      <select class="toolbar-font-select" id="edit-post-font-select" aria-label="Font family">
+        <option value="sans-serif">Sans-Serif</option>
+        <option value="Georgia, serif">Georgia</option>
+        <option value="monospace">Monospace</option>
+        <option value="Trebuchet MS, sans-serif">Trebuchet</option>
+      </select>
+    </div>
+
+    <div class="post-content-wrapper">
+      <div
+        id="edit-post-content-editable"
+        class="post-content-editable"
+        contenteditable="true"
+        role="textbox"
+      ></div>
+    </div>
+
+    <input type="hidden" id="edit-post-id">
+
+    <button type="button" id="save-edit-post-btn" class="btn-primary">
+      <i class="fas fa-check"></i> Save Changes
+    </button>
+  </div>
+</div>
+
+<!-- SUBJECT MODAL -->
+<div id="subject-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="subject-modal-title">
+    <div class="modal-header">
+      <h3 id="subject-modal-title">Add Subject</h3>
+      <button id="close-subject-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="subject-form" novalidate>
+      <input type="hidden" id="subject-edit-id">
+      <div class="form-group">
+        <label for="subject-name">Subject Name</label>
+        <input type="text" id="subject-name" placeholder="e.g. Web Systems and Technologies" required>
+      </div>
+      <div class="form-group">
+        <label for="subject-professor">Professor</label>
+        <input type="text" id="subject-professor" placeholder="e.g. Prof. Santos">
+      </div>
+      <div class="form-group">
+        <label for="subject-schedule">Schedule</label>
+        <input type="text" id="subject-schedule" placeholder="e.g. MWF 10:00-11:30 AM | Rm 301">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="subject-year">Year Level</label>
+          <select id="subject-year">
+            <option value="1st Year">1st Year</option>
+            <option value="2nd Year">2nd Year</option>
+            <option value="3rd Year">3rd Year</option>
+            <option value="4th Year">4th Year</option>
+            <option value="5th Year">5th Year</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="subject-semester">Semester</label>
+          <select id="subject-semester">
+            <option value="1st Semester">1st Semester</option>
+            <option value="2nd Semester">2nd Semester</option>
+            <option value="Summer / Midyear">Summer / Midyear</option>
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="btn-primary">
+        <i class="fas fa-check"></i> Save Subject
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- SUBJECT TASK MODAL -->
+<div id="subject-task-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="subject-task-modal-heading">
+    <div class="modal-header">
+      <h3 id="subject-task-modal-heading">Add Task</h3>
+      <button id="close-subject-task-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="subject-task-form" novalidate>
+      <input type="hidden" id="subject-task-subject-id">
+      <div class="form-group">
+        <label for="subject-task-text">Task Description</label>
+        <input type="text" id="subject-task-text" placeholder="e.g. Read Chapter 3" required>
+      </div>
+      <button type="submit" class="btn-primary">
+        <i class="fas fa-plus"></i> Add Task
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- SCHEDULE MODAL -->
+<div id="schedule-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="schedule-modal-title">
+    <div class="modal-header">
+      <h3 id="schedule-modal-title">Add Schedule</h3>
+      <button id="close-schedule-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="schedule-form" novalidate>
+      <input type="hidden" id="schedule-edit-id">
+      <div class="form-group">
+        <label for="schedule-subject">Subject</label>
+        <input type="text" id="schedule-subject" placeholder="e.g. Data Structures" required>
+      </div>
+      <div class="form-group">
+        <label for="schedule-day">Day(s)</label>
+        <input type="text" id="schedule-day" placeholder="e.g. Mon, Tue, Wed" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="schedule-start-time">Start Time</label>
+          <input type="time" id="schedule-start-time" required>
+        </div>
+        <div class="form-group">
+          <label for="schedule-end-time">End Time</label>
+          <input type="time" id="schedule-end-time" required>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="schedule-room">Room</label>
+        <input type="text" id="schedule-room" placeholder="e.g. Room 301">
+      </div>
+      <button type="submit" class="btn-primary">
+        <i class="fas fa-check"></i> Save Schedule
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- ASSIGNMENT MODAL -->
+<div id="assignment-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="assignment-modal-heading">
+    <div class="modal-header">
+      <h3 id="assignment-modal-heading">Add Assignment</h3>
+      <button id="close-assignment-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="assignment-form" novalidate>
+      <div class="form-group">
+        <label for="assignment-text">Task Description</label>
+        <input type="text" id="assignment-text" placeholder="e.g. Submit Project Proposal" required>
+      </div>
+      <div class="form-group">
+        <label for="assignment-subject">Subject</label>
+        <input type="text" id="assignment-subject" placeholder="e.g. Web Systems">
+      </div>
+      <div class="form-group">
+        <label for="assignment-due-date">Due Date (optional)</label>
+        <input type="date" id="assignment-due-date">
+      </div>
+      <button type="submit" class="btn-primary">
+        <i class="fas fa-plus"></i> Add Task
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- GRADE MODAL -->
+<div id="grade-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="grade-modal-title">
+    <div class="modal-header">
+      <h3 id="grade-modal-title">Add College Grade</h3>
+      <button id="close-grade-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="grade-form" novalidate>
+      <input type="hidden" id="grade-edit-id">
+      <div class="form-group">
+        <label for="grade-subject">Subject Name</label>
+        <input type="text" id="grade-subject" placeholder="e.g. Web Systems and Technologies" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="grade-value">Grade (e.g. 1.25 or 92.5)</label>
+          <input type="number" id="grade-value" placeholder="1.00 - 5.00 or 100" step="0.01" min="0" max="100" required inputmode="decimal">
+        </div>
+        <div class="form-group">
+          <label for="grade-units">Units / Credit Hours</label>
+          <input type="number" id="grade-units" placeholder="3" step="1" min="1" max="12" value="3" required inputmode="numeric">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="grade-year">Year Level</label>
+          <select id="grade-year">
+            <option value="1st Year">1st Year</option>
+            <option value="2nd Year">2nd Year</option>
+            <option value="3rd Year">3rd Year</option>
+            <option value="4th Year">4th Year</option>
+            <option value="5th Year">5th Year</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="grade-semester">Semester / Term</label>
+          <select id="grade-semester">
+            <option value="1st Semester">1st Semester</option>
+            <option value="2nd Semester">2nd Semester</option>
+            <option value="Summer / Midyear">Summer / Midyear</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group grade-checkbox-group">
+        <label class="custom-checkbox-label">
+          <input type="checkbox" id="grade-exclude">
+          <span>Exclude from General Weighted Average (e.g., PE, NSTP, Audit)</span>
+        </label>
+      </div>
+      <button type="submit" class="btn-primary">
+        <i class="fas fa-check"></i> Save Grade
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- CURRICULUM SUBJECT MODAL -->
+<div id="curriculum-subject-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="curriculum-subject-modal-title">
+    <div class="modal-header">
+      <h3 id="curriculum-subject-modal-title">Add Curriculum Subject</h3>
+      <button id="close-curriculum-subject-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="curriculum-subject-form" novalidate>
+      <input type="hidden" id="curriculum-subject-edit-id">
+      <div class="form-group">
+        <label for="curriculum-subject-name">Subject Name</label>
+        <input type="text" id="curriculum-subject-name" placeholder="e.g. Data Structures &amp; Algorithms" required>
+      </div>
+      <div class="form-group">
+        <label for="curriculum-subject-code">Subject Code</label>
+        <input type="text" id="curriculum-subject-code" placeholder="e.g. IT 203" required>
+      </div>
+      <div class="form-group">
+        <label for="curriculum-subject-schedule">Schedule / Time</label>
+        <input type="text" id="curriculum-subject-schedule" placeholder="e.g. MWF 10:00-11:30 AM">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="curriculum-subject-year">Year Level</label>
+          <select id="curriculum-subject-year" required>
+            <option value="1st Year">1st Year</option>
+            <option value="2nd Year">2nd Year</option>
+            <option value="3rd Year">3rd Year</option>
+            <option value="4th Year">4th Year</option>
+            <option value="5th Year">5th Year</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="curriculum-subject-semester">Semester</label>
+          <select id="curriculum-subject-semester" required>
+            <option value="1st Semester">1st Semester</option>
+            <option value="2nd Semester">2nd Semester</option>
+            <option value="Summer / Midyear">Summer / Midyear</option>
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="btn-primary">
+        <i class="fas fa-check"></i> Save Subject
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- DELETE ACCOUNT MODAL -->
+<div id="delete-account-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-account-modal-heading">
+    <div class="modal-header">
+      <h3 id="delete-account-modal-heading" style="color:var(--coral-pink,#ef4444);">
+        <i class="fas fa-user-xmark"></i> Delete Account
+      </h3>
+      <button id="close-delete-account-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <div class="delete-account-warning">
+      <i class="fas fa-triangle-exclamation delete-account-warning-icon"></i>
+      <p><strong>This action is permanent and cannot be undone.</strong></p>
+      <p>All your data will be deleted — posts, assignments, grades, schedule, subjects, curriculum, and profile information.</p>
+    </div>
+    <div id="delete-account-error" class="form-error" hidden></div>
+    <div class="form-group">
+      <label for="delete-account-password">Confirm your password to continue</label>
+      <input type="password" id="delete-account-password" placeholder="Enter your current password" autocomplete="current-password">
+    </div>
+    <button type="button" id="delete-account-confirm-btn" class="btn-danger-confirm">
+      <i class="fas fa-trash-can"></i> Yes, Delete My Account
+    </button>
+    <button type="button" id="delete-account-cancel-btn" class="btn-secondary" style="width:100%;justify-content:center;">
+      Cancel
+    </button>
+  </div>
+</div>
+
+<!-- FORGOT PASSWORD MODAL -->
+<div id="forgot-password-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="forgot-modal-heading">
+    <div class="modal-header">
+      <h3 id="forgot-modal-heading">Reset Password</h3>
+      <button id="close-forgot-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="forgot-password-form" novalidate>
+      <p style="font-size:14px;color:var(--gray-500);margin-bottom:12px;">
+        Enter your email address and we'll send you instructions to reset your password.
+      </p>
+      <div id="forgot-error" class="form-error" hidden></div>
+      <div id="forgot-success" class="form-success" hidden></div>
+      <div class="form-group">
+        <label for="forgot-email">Email Address</label>
+        <input type="email" id="forgot-email" placeholder="Enter your email" required autocomplete="email">
+      </div>
+      <button type="submit" class="btn-primary">
+        <i class="fas fa-paper-plane"></i> Send Reset Link
+      </button>
+      <p style="text-align:center;font-size:13px;margin-top:8px;">
+        <a href="#" id="forgot-back-to-login">Back to Login</a>
+      </p>
+    </form>
+  </div>
+</div>
+
+<!-- ==================== NEW: RESET PASSWORD (IN-APP) MODAL ==================== -->
+<!-- Keep this for compatibility but it will be replaced by the view -->
+<div id="reset-password-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reset-modal-heading">
+    <div class="modal-header">
+      <h3 id="reset-modal-heading"><i class="fas fa-key"></i> Set New Password</h3>
+      <button id="close-reset-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="reset-password-form" novalidate>
+      <p style="font-size:14px;color:var(--gray-500);margin-bottom:12px;">
+        Enter your new password below.
+      </p>
+      <div id="reset-error" class="form-error" hidden></div>
+      <div id="reset-success" class="form-success" hidden></div>
+      <div class="form-group">
+        <label for="reset-new-password">New Password (min 6 characters)</label>
+        <input type="password" id="reset-new-password" placeholder="Enter new password" required minlength="6" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label for="reset-confirm-password">Confirm Password</label>
+        <input type="password" id="reset-confirm-password" placeholder="Confirm new password" required autocomplete="new-password">
+      </div>
+      <input type="hidden" id="reset-token-field">
+      <button type="submit" class="btn-primary" id="reset-submit-btn">
+        <i class="fas fa-check"></i> Update Password
+      </button>
+      <p style="text-align:center;font-size:13px;margin-top:8px;">
+        <a href="#" id="reset-back-to-login">Back to Login</a>
+      </p>
+    </form>
+  </div>
+</div>
+<!-- ==================== END RESET PASSWORD MODAL ==================== -->
+
+<!-- ==================== UPLOAD SCHOOL FILE MODAL ==================== -->
+<div id="upload-file-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="upload-file-modal-title">
+    <div class="modal-header">
+      <h3 id="upload-file-modal-title"><i class="fas fa-cloud-arrow-up"></i> Upload School File</h3>
+      <button id="close-upload-file-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+    <form id="upload-school-file-form" novalidate>
+      <input type="hidden" id="upload-file-edit-id">
+      
+      <div class="school-file-dropzone" id="school-file-dropzone">
+        <i class="fas fa-file-arrow-up school-dropzone-icon"></i>
+        <div class="school-dropzone-text">
+          <strong id="school-dropzone-name">Choose a file or drag &amp; drop here</strong>
+          <span id="school-dropzone-meta">PDF, Word (.docx), PPT, Excel, Images, Code, Notes (Max 25MB)</span>
+        </div>
+        <input type="file" id="school-file-modal-input" required hidden accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.webp,.gif,.zip,.rar">
+      </div>
+
+      <div class="form-group">
+        <label for="school-file-name-input">Display Title / Name</label>
+        <input type="text" id="school-file-name-input" placeholder="e.g. Finals Reviewer - Data Structures" required>
+      </div>
+
+      <div class="form-group">
+        <label for="school-file-category-input">Category</label>
+        <select id="school-file-category-input">
+          <option value="Notes" selected>Notes / Lecture</option>
+          <option value="Reviewer">Reviewer / Study Guide</option>
+          <option value="Syllabus">Syllabus / Outline</option>
+          <option value="Assignment">Assignment / Activity</option>
+          <option value="Module">Module / Chapter</option>
+          <option value="Project">Project / Code</option>
+          <option value="Other">Other Document</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="school-file-subject-input">Related Subject (Optional)</label>
+        <input type="text" id="school-file-subject-input" placeholder="e.g. Web Development" list="user-subjects-datalist">
+        <datalist id="user-subjects-datalist"></datalist>
+      </div>
+
+      <div class="form-group">
+        <label for="school-file-notes-input">Remarks / Description (Optional)</label>
+        <textarea id="school-file-notes-input" rows="2" placeholder="Add coverage, key concepts, or instructor notes..."></textarea>
+      </div>
+
+      <button type="submit" class="btn-primary" id="save-school-file-btn">
+        <i class="fas fa-check"></i> Upload School File
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- ==================== FILE PREVIEW MODAL ==================== -->
+<div id="file-preview-modal-overlay" class="modal-overlay file-preview-overlay" aria-hidden="true">
+  <div class="modal-card file-preview-modal-card" role="dialog" aria-modal="true" aria-labelledby="preview-file-modal-title">
+    <div class="modal-header file-preview-modal-header">
+      <div class="file-preview-header-info">
+        <div class="file-preview-icon-wrap" id="preview-file-icon-wrap">
+          <i class="fas fa-file" id="preview-file-icon"></i>
+        </div>
+        <div>
+          <h3 id="preview-file-modal-title" class="preview-file-title">File Preview</h3>
+          <span class="file-preview-meta" id="preview-file-meta">PDF • 1.2 MB</span>
+        </div>
+      </div>
+      <div class="file-preview-header-actions">
+        <button type="button" class="btn-secondary btn-sm" id="preview-download-btn"><i class="fas fa-download"></i> Download</button>
+        <button id="close-file-preview-modal-btn" class="modal-close" aria-label="Close">
+          <i class="fas fa-xmark"></i>
+        </button>
+      </div>
+    </div>
+    <div class="file-preview-body" id="file-preview-body">
+      <!-- dynamically populated by script.js -->
+    </div>
+  </div>
+</div>
+
+<!-- ==================== IMAGE VIEWER ==================== -->
+<div id="image-viewer-overlay" class="image-viewer-overlay" aria-hidden="true">
+  <div class="image-viewer-content">
+    <img id="image-viewer-img" src="" alt="Zoomed image">
+  </div>
+</div>
+
+<!-- ==================== INACTIVITY LOGOUT MODAL ==================== -->
+<div id="inactivity-modal-overlay" class="cc-inactivity-overlay" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="inactivity-modal-title">
+  <div class="cc-inactivity-box">
+    <div class="cc-inactivity-icon-wrap">
+      <i class="fas fa-user-clock"></i>
+    </div>
+    <h3 class="cc-inactivity-title" id="inactivity-modal-title">Session Expired</h3>
+    <p class="cc-inactivity-msg">You are not active, we logout your account for protection.</p>
+    <button id="inactivity-back-to-login-btn" class="btn-primary cc-inactivity-btn">
+      <i class="fas fa-right-to-bracket"></i> Back to Login
+    </button>
+  </div>
+</div>
+
+<!-- ==================== LANDSCAPE LOCK ==================== -->
+<div id="landscape-lock" class="landscape-lock" aria-live="polite" hidden>
+  <div class="landscape-lock-inner">
+    <i class="fas fa-mobile-screen-button"></i>
+    <p>Please rotate your device back to portrait mode.</p>
+  </div>
+</div>
+
+<!-- ==================== OFFLINE BANNER ==================== -->
+<div id="offline-banner" class="offline-banner" hidden aria-live="polite">
+  <i class="fas fa-wifi"></i> You are currently offline
+</div>
+
+<!-- Script -->
+<script src="script.js"></script>
+</body>
+</html>
