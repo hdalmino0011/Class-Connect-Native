@@ -6827,7 +6827,7 @@ function getRemoteSession() {
         if (!isValidEmail(email)){ showError("signup-error", "Please enter a valid email address."); return; }
         if (!studentId)          { showError("signup-error", "Please enter your Student ID number."); return; }
         if (!year)               { showError("signup-error", "Please select your year level."); return; }
-        if (!semester)           { showError("signup-error", "Please select your current semester."); return; }
+        if (semesterInput && !semester) { showError("signup-error", "Please select your current semester."); return; }
         if (!section)            { showError("signup-error", "Please enter your section (e.g. BSIT 3-A)."); return; }
         if (password.length < 6) { showError("signup-error", "Password must be at least 6 characters."); return; }
         if (password !== confirm) { showError("signup-error", "Passwords do not match."); return; }
