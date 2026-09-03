@@ -22,7 +22,9 @@ const filesToCopy = [
   'logo.png',
   'gcashQR.jpg',
   'gotymeQR.jpg',
-  'maribankQR.jpg'
+  'maribankQR.jpg',
+  'pdf.min.js',
+  'pdf.worker.min.js'
 ];
 
 filesToCopy.forEach(file => {

@@ -517,10 +517,29 @@
     <!-- ===== VIEW: ASSIGNMENTS ===== -->
     <div id="view-assignments" class="dashboard-view">
       <div class="view-header">
-        <h2 class="view-heading"><i class="fas fa-clipboard-list"></i> Assignments</h2>
+        <div>
+          <h2 class="view-heading"><i class="fas fa-clipboard-list"></i> Assignments</h2>
+          <span id="assignments-active-term-badge" class="schedule-term-indicator" style="font-size: 12px; color: var(--navy-accent); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px;">
+            <i class="fas fa-layer-group"></i> Active Term: <span id="assignments-active-term-text">3rd Year &bull; 1st Semester</span>
+          </span>
+        </div>
         <button id="add-assignment-btn" class="btn-add" type="button">
           <i class="fas fa-plus"></i> Add Task
         </button>
+      </div>
+      <div class="curriculum-filters assignments-filter-bar">
+        <button class="assignment-year-filter active" data-year="all">All Years</button>
+        <button class="assignment-year-filter" data-year="1st Year">1st Year</button>
+        <button class="assignment-year-filter" data-year="2nd Year">2nd Year</button>
+        <button class="assignment-year-filter" data-year="3rd Year">3rd Year</button>
+        <button class="assignment-year-filter" data-year="4th Year">4th Year</button>
+        <button class="assignment-year-filter" data-year="5th Year">5th Year</button>
+        <select id="assignments-semester-filter" class="curriculum-semester-filter" aria-label="Filter by Semester">
+          <option value="all">All Semesters</option>
+          <option value="1st Semester">1st Semester</option>
+          <option value="2nd Semester">2nd Semester</option>
+          <option value="Summer / Midyear">Summer / Midyear</option>
+        </select>
       </div>
       <div id="assignments-list" class="assignments-list">
         <!-- assignments rendered by script.js -->
@@ -1598,11 +1617,16 @@
     </div>
     <form id="subject-task-form" novalidate>
       <input type="hidden" id="subject-task-subject-id">
+      <input type="hidden" id="subject-task-edit-id">
       <div class="form-group">
         <label for="subject-task-text">Task Description</label>
         <input type="text" id="subject-task-text" placeholder="e.g. Read Chapter 3" required>
       </div>
-      <button type="submit" class="btn-primary">
+      <div class="form-group">
+        <label for="subject-task-due-date">Due Date (optional)</label>
+        <input type="date" id="subject-task-due-date">
+      </div>
+      <button type="submit" class="btn-primary" id="subject-task-submit-btn">
         <i class="fas fa-plus"></i> Add Task
       </button>
     </form>
@@ -1659,19 +1683,50 @@
       </button>
     </div>
     <form id="assignment-form" novalidate>
+      <input type="hidden" id="assignment-edit-id">
+      <input type="hidden" id="assignment-task-id">
+      <input type="hidden" id="assignment-subject-id">
       <div class="form-group">
         <label for="assignment-text">Task Description</label>
         <input type="text" id="assignment-text" placeholder="e.g. Submit Project Proposal" required>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="assignment-modal-year">Year Level</label>
+          <select id="assignment-modal-year">
+            <option value="1st Year">1st Year</option>
+            <option value="2nd Year">2nd Year</option>
+            <option value="3rd Year">3rd Year</option>
+            <option value="4th Year">4th Year</option>
+            <option value="5th Year">5th Year</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="assignment-modal-semester">Semester</label>
+          <select id="assignment-modal-semester">
+            <option value="1st Semester">1st Semester</option>
+            <option value="2nd Semester">2nd Semester</option>
+            <option value="Summer / Midyear">Summer / Midyear</option>
+          </select>
+        </div>
+      </div>
       <div class="form-group">
-        <label for="assignment-subject">Subject</label>
-        <input type="text" id="assignment-subject" placeholder="e.g. Web Systems">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+          <label for="assignment-subject" style="margin-bottom: 0;">Subject</label>
+          <span id="assignment-subject-term-badge" class="badge-term-hint" style="font-size: 11px; font-weight: 600; color: var(--primary-blue); background: var(--pale-blue); padding: 2px 8px; border-radius: 9999px;">Current Term</span>
+        </div>
+        <select id="assignment-subject" class="assignment-subject-select" required>
+          <option value="" disabled selected>Select a subject...</option>
+        </select>
+        <div id="assignment-custom-subject-wrap" style="display: none; margin-top: 8px;">
+          <input type="text" id="assignment-subject-custom" placeholder="Type custom subject name...">
+        </div>
       </div>
       <div class="form-group">
         <label for="assignment-due-date">Due Date (optional)</label>
         <input type="date" id="assignment-due-date">
       </div>
-      <button type="submit" class="btn-primary">
+      <button type="submit" class="btn-primary" id="assignment-submit-btn">
         <i class="fas fa-plus"></i> Add Task
       </button>
     </form>
@@ -2094,6 +2149,7 @@
 </div>
 
 <!-- Script -->
+<script src="pdf.min.js"></script>
 <script src="/api/config.js"></script>
 <script src="script.js?v=2.1.0"></script>
 </body>

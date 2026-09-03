@@ -23,6 +23,7 @@
     "@capacitor/splash-screen": "^8.0.2",
     "@capacitor/status-bar": "^8.0.3",
     "@google/genai": "^2.19.0",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "pdfjs-dist": "3.11.174"
   }
 }
