@@ -2651,13 +2651,53 @@ function getRemoteSession() {
       } catch (e) {}
     }
 
-    function checkPermissionState() {
+    async function ensureNotificationChannel() {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+        try {
+          await window.Capacitor.Plugins.LocalNotifications.createChannel({
+            id: "classconnect_reminders",
+            name: "ClassConnect Alerts",
+            description: "Daily schedule digests, class reminders, and assignment alerts",
+            importance: 5,
+            visibility: 1,
+            sound: "beep.wav",
+            vibration: true
+          });
+        } catch (e) {
+          console.warn("[ClassConnect] Notification channel setup error:", e);
+        }
+      }
+    }
+
+    async function autoPromptPermissionIfNeeded() {
+      await ensureNotificationChannel();
+      try {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+          var check = await window.Capacitor.Plugins.LocalNotifications.checkPermissions();
+          var disp = check ? check.display : "prompt";
+          if (disp === "prompt" || disp === "prompt-with-rationale") {
+            console.log("[ClassConnect] Prompting native notification permissions on launch...");
+            await requestPermission();
+          }
+        }
+      } catch (e) {
+        console.warn("[ClassConnect] Auto permission check error:", e);
+      }
+    }
+
+    async function checkPermissionState() {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+        try {
+          var check = await window.Capacitor.Plugins.LocalNotifications.checkPermissions();
+          if (check && check.display) return check.display;
+        } catch (e) {}
+      }
       if (!("Notification" in window)) return "unsupported";
       return Notification.permission;
     }
 
-    function updatePermissionUI() {
-      var state = checkPermissionState();
+    async function updatePermissionUI() {
+      var state = await checkPermissionState();
       var badge = document.getElementById("notif-permission-badge");
       var desc = document.getElementById("notif-permission-desc");
       var reqBtn = document.getElementById("notif-request-perm-btn");
@@ -2673,12 +2713,12 @@ function getRemoteSession() {
         } else if (state === "denied") {
           badge.classList.add("notif-status-denied");
           badge.textContent = "Blocked";
-          if (desc) desc.textContent = "Notifications are blocked in your browser site settings";
+          if (desc) desc.textContent = "Notifications are blocked in your device/app settings";
           if (reqBtn) reqBtn.style.display = "none";
         } else if (state === "unsupported") {
           badge.classList.add("notif-status-denied");
           badge.textContent = "Unsupported";
-          if (desc) desc.textContent = "This browser does not support web notifications";
+          if (desc) desc.textContent = "This device does not support notifications";
           if (reqBtn) reqBtn.style.display = "none";
         } else {
           badge.classList.add("notif-status-default");
@@ -2690,7 +2730,7 @@ function getRemoteSession() {
 
       if (banner) {
         var isDismissed = localStorage.getItem(STORAGE_BANNER_DISMISSED) === "true";
-        if (state === "default" && !isDismissed) {
+        if ((state === "default" || state === "prompt" || state === "prompt-with-rationale") && !isDismissed) {
           banner.style.display = "flex";
         } else {
           banner.style.display = "none";
@@ -2716,13 +2756,38 @@ function getRemoteSession() {
     }
 
     async function requestPermission() {
+      // 1. Native Capacitor Local Notifications check
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+        try {
+          await ensureNotificationChannel();
+          var capRes = await window.Capacitor.Plugins.LocalNotifications.requestPermissions();
+          if (capRes && (capRes.display === "granted" || capRes.display === "prompt-with-rationale")) {
+            await updatePermissionUI();
+            playChime();
+            vibrate([150, 80, 150]);
+            sendNotification(
+              "Device Notifications Enabled",
+              "ClassConnect will now notify you of daily schedules, upcoming classes, deadlines, and posts.",
+              "system",
+              { view: "view-home" }
+            );
+            showToast("Native device notifications active!", "success");
+            runAllReminderChecks();
+            return true;
+          }
+        } catch (e) {
+          console.warn("Capacitor notification request error:", e);
+        }
+      }
+
+      // 2. Web fallback
       if (!("Notification" in window)) {
-        showToast("Notifications are not supported in this browser.", "warning");
+        showToast("Notifications are not supported on this device/browser.", "warning");
         return false;
       }
       try {
         var res = await Notification.requestPermission();
-        updatePermissionUI();
+        await updatePermissionUI();
         if (res === "granted") {
           playChime();
           vibrate([150, 80, 150]);
@@ -2736,7 +2801,7 @@ function getRemoteSession() {
           runAllReminderChecks();
           return true;
         } else if (res === "denied") {
-          showToast("Notifications were blocked. Enable them in browser settings.", "warning");
+          showToast("Notifications were blocked. Enable them in site/app settings.", "warning");
           return false;
         }
       } catch (e) {
@@ -2768,6 +2833,34 @@ function getRemoteSession() {
       if (prefs.sound) playChime();
       if (prefs.vibration) vibrate(options.vibrate || [150, 80, 150]);
 
+      // 1. Send via Capacitor Native Local Notifications if running natively in APK
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) {
+        ensureNotificationChannel().then(function () {
+          try {
+            var notifId = (Date.now() % 10000000) + Math.floor(Math.random() * 1000);
+            window.Capacitor.Plugins.LocalNotifications.schedule({
+              notifications: [
+                {
+                  id: notifId,
+                  title: title,
+                  body: body,
+                  channelId: "classconnect_reminders",
+                  smallIcon: "ic_launcher",
+                  iconColor: "#2563EB",
+                  extra: {
+                    view: options.view || "view-home"
+                  }
+                }
+              ]
+            });
+          } catch (e) {
+            console.warn("Native local notification dispatch error:", e);
+          }
+        });
+        return;
+      }
+
+      // 2. Web browser fallback
       if ("Notification" in window && Notification.permission === "granted") {
         var notifOptions = {
           body: body,
@@ -2807,21 +2900,40 @@ function getRemoteSession() {
 
     function parseDaysFromText(text) {
       if (!text) return [];
-      var str = text.toUpperCase();
+      var str = text.toUpperCase()
+        .replace(/\b(\d{1,2}(:\d{2})?\s*(AM|PM|NN)?)\b/gi, "")
+        .replace(/\b(AM|PM|NN)\b/gi, "");
       var days = new Set();
-      if (str.indexOf("DAILY") !== -1 || str.indexOf("EVERYDAY") !== -1) {
-        return [0, 1, 2, 3, 4, 5, 6];
-      }
-      if (str.indexOf("MON") !== -1 || str.indexOf("M") !== -1) days.add(1);
-      if (str.indexOf("TUE") !== -1 || str.indexOf("THU") !== -1 || str.indexOf("TH") !== -1 || str.indexOf("T") !== -1) {
-        if (str.indexOf("THU") !== -1 || str.indexOf("TH") !== -1) days.add(4);
-        if (str.indexOf("TUE") !== -1 || (str.indexOf("T") !== -1 && str.indexOf("TH") === -1)) days.add(2);
-      }
-      if (str.indexOf("WED") !== -1 || str.indexOf("W") !== -1) days.add(3);
-      if (str.indexOf("FRI") !== -1 || str.indexOf("F") !== -1) days.add(5);
-      if (str.indexOf("SAT") !== -1 || str.indexOf("S") !== -1) days.add(6);
-      if (str.indexOf("SUN") !== -1) days.add(0);
-      return Array.from(days);
+      if (str.indexOf("DAILY") !== -1 || str.indexOf("EVERYDAY") !== -1) return [0, 1, 2, 3, 4, 5, 6];
+
+      if (str.indexOf("SUNDAY") !== -1 || /\bSUN\b/.test(str)) { days.add(0); str = str.replace(/SUNDAY|\bSUN\b/g, ""); }
+      if (str.indexOf("MONDAY") !== -1 || /\bMON\b/.test(str)) { days.add(1); str = str.replace(/MONDAY|\bMON\b/g, ""); }
+      if (str.indexOf("TUESDAY") !== -1 || /\bTUE\b/.test(str)) { days.add(2); str = str.replace(/TUESDAY|\bTUE\b/g, ""); }
+      if (str.indexOf("WEDNESDAY") !== -1 || /\bWED\b/.test(str)) { days.add(3); str = str.replace(/WEDNESDAY|\bWED\b/g, ""); }
+      if (str.indexOf("THURSDAY") !== -1 || /\bTHU\b/.test(str) || /\bTH\b/.test(str)) { days.add(4); str = str.replace(/THURSDAY|\bTHU\b|\bTH\b/g, ""); }
+      if (str.indexOf("FRIDAY") !== -1 || /\bFRI\b/.test(str)) { days.add(5); str = str.replace(/FRIDAY|\bFRI\b/g, ""); }
+      if (str.indexOf("SATURDAY") !== -1 || /\bSAT\b/.test(str)) { days.add(6); str = str.replace(/SATURDAY|\bSAT\b/g, ""); }
+
+      var tokens = str.split(/[\s,\/|-]+/);
+      tokens.forEach(function (token) {
+        if (!token) return;
+        if (token === "MWF") { days.add(1); days.add(3); days.add(5); return; }
+        if (token === "TTH" || token === "T-TH") { days.add(2); days.add(4); return; }
+        if (token === "TWTH") { days.add(2); days.add(3); days.add(4); return; }
+        if (token === "WTH") { days.add(3); days.add(4); return; }
+        if (/^[MTWHFSU]+$/.test(token)) {
+          if (token.indexOf("TH") !== -1) { days.add(4); token = token.replace("TH", ""); }
+          if (token.indexOf("H") !== -1) days.add(4);
+          if (token.indexOf("M") !== -1) days.add(1);
+          if (token.indexOf("T") !== -1) days.add(2);
+          if (token.indexOf("W") !== -1) days.add(3);
+          if (token.indexOf("F") !== -1) days.add(5);
+          if (token.indexOf("S") !== -1) days.add(6);
+          if (token.indexOf("U") !== -1) days.add(0);
+        }
+      });
+
+      return Array.from(days).sort();
     }
 
     function parseStartTimeToMinutes(text) {
@@ -2908,8 +3020,9 @@ function getRemoteSession() {
         var dayName = dayNames[now.getDay()];
 
         // 1. Daily Morning Digest
+        var userSuffix = (currentUser && currentUser.id) ? ("_" + currentUser.id) : "";
         if (prefs.scheduleDaily && todayClasses.length > 0) {
-          var digestKey = "cc_notif_digest_" + dateKey;
+          var digestKey = "cc_notif_digest_" + dateKey + userSuffix;
           if (!localStorage.getItem(digestKey)) {
             var classSummary = todayClasses.map(function (c) { return c.name + (c.scheduleText ? " (" + c.scheduleText + ")" : ""); }).join(", ");
             sendNotification(
@@ -2919,6 +3032,17 @@ function getRemoteSession() {
               { view: "view-schedule", tag: "cc_daily_digest" }
             );
             localStorage.setItem(digestKey, "true");
+          }
+        } else if (prefs.scheduleDaily && todayClasses.length === 0) {
+          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + userSuffix;
+          if (!localStorage.getItem(emptyDigestKey)) {
+            sendNotification(
+              "Today's Schedule — " + dayName,
+              "No classes scheduled for today (" + dayName + "). Enjoy your day or review upcoming tasks!",
+              "schedule",
+              { view: "view-schedule", tag: "cc_daily_digest" }
+            );
+            localStorage.setItem(emptyDigestKey, "true");
           }
         }
 
@@ -3241,7 +3365,9 @@ function getRemoteSession() {
         updatePermissionUI();
         updateTopnavBadge();
         updateAppBadge();
+        autoPromptPermissionIfNeeded();
       },
+      autoPromptPermissionIfNeeded: autoPromptPermissionIfNeeded,
       updatePermissionUI: updatePermissionUI,
       updateTopnavBadge: updateTopnavBadge,
       updateAppBadge: updateAppBadge,
@@ -5836,7 +5962,11 @@ function getRemoteSession() {
     // Initialize Device Notifications & Reminders Engine
     DeviceNotificationManager.updatePermissionUI();
     DeviceNotificationManager.updateTopnavBadge();
-    DeviceNotificationManager.runAllReminderChecks();
+    DeviceNotificationManager.autoPromptPermissionIfNeeded().then(function () {
+      DeviceNotificationManager.runAllReminderChecks();
+    }).catch(function () {
+      DeviceNotificationManager.runAllReminderChecks();
+    });
 
     if (window._notifCheckInterval) clearInterval(window._notifCheckInterval);
     window._notifCheckInterval = setInterval(function () {
@@ -7312,6 +7442,16 @@ function getRemoteSession() {
     }, 1800);
 
     try {
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {
+        try {
+          window.Capacitor.Plugins.StatusBar.setOverlaysWebView({ overlay: false });
+          window.Capacitor.Plugins.StatusBar.setBackgroundColor({ color: "#0F172A" });
+          window.Capacitor.Plugins.StatusBar.setStyle({ style: "DARK" });
+        } catch (sbErr) {
+          console.warn("[ClassConnect] StatusBar config error:", sbErr);
+        }
+      }
+
       initializeSupabase();
       applySettings(getSettings());
       lockPortrait();
