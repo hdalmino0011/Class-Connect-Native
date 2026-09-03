@@ -3,7 +3,7 @@
    Cache-first with network fallback
    ========================================================= */
 
-const CACHE_NAME = "classconnect-cache-v2";
+const CACHE_NAME = "classconnect-cache-v3";
 
 const ASSETS_TO_CACHE = [
   "index.html",

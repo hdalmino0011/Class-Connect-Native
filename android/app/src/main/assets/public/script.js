@@ -343,6 +343,68 @@ function getRemoteSession() {
     }
   }
 
+  // ClassConnect uses Philippine time for academic reminders. The device may
+  // be set to another timezone, so notification dates must not depend on the
+  // phone's locale.
+  var APP_TIME_ZONE = "Asia/Manila";
+  var APP_WEEKDAY_INDEX = {
+    Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
+    Thursday: 4, Friday: 5, Saturday: 6
+  };
+
+  function getPhilippineNowParts() {
+    var now = new Date();
+    try {
+      var parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: APP_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        weekday: "long"
+      }).formatToParts(now);
+      var values = {};
+      parts.forEach(function (part) { values[part.type] = part.value; });
+      return {
+        date: now,
+        year: parseInt(values.year, 10),
+        month: parseInt(values.month, 10),
+        day: parseInt(values.day, 10),
+        hour: parseInt(values.hour, 10),
+        minute: parseInt(values.minute, 10),
+        second: parseInt(values.second, 10),
+        weekday: values.weekday || "Sunday",
+        dayIndex: APP_WEEKDAY_INDEX[values.weekday] != null ? APP_WEEKDAY_INDEX[values.weekday] : now.getDay()
+      };
+    } catch (e) {
+      return {
+        date: now,
+        year: now.getFullYear(),
+        month: now.getMonth() + 1,
+        day: now.getDate(),
+        hour: now.getHours(),
+        minute: now.getMinutes(),
+        second: now.getSeconds(),
+        weekday: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][now.getDay()],
+        dayIndex: now.getDay()
+      };
+    }
+  }
+
+  function getPhilippineDateKey(offsetDays) {
+    var current = getPhilippineNowParts();
+    var shifted = new Date(Date.UTC(current.year, current.month - 1, current.day + (offsetDays || 0)));
+    return shifted.toISOString().slice(0, 10);
+  }
+
+  function compareDateKeys(a, b) {
+    if (!a || !b) return 0;
+    return a < b ? -1 : (a > b ? 1 : 0);
+  }
+
   function isValidEmail(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
@@ -1213,11 +1275,18 @@ function getRemoteSession() {
 
       // ===== SYNC: Ensure subject exists in 'subjects' =====
       var scheduleStr = buildScheduleString(day, startTime, endTime);
+      var currentTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
+        ? window.DeviceNotificationManager.getActiveAcademicTerm()
+        : { year: localStorage.getItem("cc_active_year") || "", semester: localStorage.getItem("cc_active_semester") || "", isConfigured: false };
+      if (!currentTerm.isConfigured) {
+        throw new Error("Select your current year and semester before adding a schedule.");
+      }
+
       await ensureSubjectInSubjects({
         name: subject.trim(),
         schedule: scheduleStr || day || "",
-        year: "1st Year",
-        semester: "1st Semester",
+        year: (currentTerm.year && currentTerm.year !== "All Years") ? currentTerm.year : "2nd Year",
+        semester: (currentTerm.semester && currentTerm.semester !== "All Semesters") ? currentTerm.semester : "2nd Semester",
         professor: "",
       });
 
@@ -1258,11 +1327,15 @@ function getRemoteSession() {
       var startTime = data.start_time || current.data.start_time;
       var endTime = data.end_time || current.data.end_time;
       var scheduleStr = buildScheduleString(day, startTime, endTime);
+      var activeTerm = window.DeviceNotificationManager &&
+        typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function"
+        ? window.DeviceNotificationManager.getActiveAcademicTerm()
+        : { year: "", semester: "", isConfigured: false };
       await ensureSubjectInSubjects({
         name: subjectName.trim(),
         schedule: scheduleStr || day || "",
-        year: current.data.year || "1st Year",
-        semester: current.data.semester || "1st Semester",
+        year: current.data.year || activeTerm.year,
+        semester: current.data.semester || activeTerm.semester,
         professor: "",
       });
 
@@ -1306,18 +1379,36 @@ function getRemoteSession() {
   async function addAssignment(text, subject, dueDate) {
     return withAuthCheck(async function () {
       var user = getCurrentUser();
+      var activeTerm = window.DeviceNotificationManager &&
+        typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function"
+        ? window.DeviceNotificationManager.getActiveAcademicTerm()
+        : { year: "", semester: "" };
       var item = {
         user_id: user.id,
         text: text.trim(),
         subject: subject.trim(),
         due_date: dueDate || "",
         completed: false,
+        year: activeTerm.isConfigured ? activeTerm.year : null,
+        semester: activeTerm.isConfigured ? activeTerm.semester : null,
       };
+      var payload = Object.assign({}, item);
       var result = await withTimeout(
-        supabaseTable("assignments").insert(item).select().single(),
+        supabaseTable("assignments").insert(payload).select().single(),
         8000,
         "Assignment add"
       );
+      // Keep older Supabase schemas usable while the new term columns are
+      // added. Subject-linked legacy rows are still filtered safely below.
+      if (result.error && /Could not find the '([^']+)' column/i.test(result.error.message || "")) {
+        delete payload.year;
+        delete payload.semester;
+        result = await withTimeout(
+          supabaseTable("assignments").insert(payload).select().single(),
+          8000,
+          "Assignment add (legacy schema)"
+        );
+      }
       if (result.error) throw result.error;
       return result.data;
     });
@@ -1890,6 +1981,8 @@ function getRemoteSession() {
       email: user.email.toLowerCase(),
       section: data.section ? normalizeSection(data.section) : getProfile().section,
     });
+    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
+    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
     var saved = await upsertRemoteProfile(remoteProfile);
     if (saved && saved.name && remoteUser) remoteUser.name = saved.name;
     return saved;
@@ -1899,7 +1992,13 @@ function getRemoteSession() {
     const user = getCurrentUser();
     if (!user) return {};
     if (remoteProfile) return Object.assign({}, remoteProfile);
-    return { name: user.name, email: user.email, section: "" };
+    return {
+      name: user.name,
+      email: user.email,
+      year: user.year || (user.user_metadata && user.user_metadata.year) || "",
+      semester: user.semester || (user.user_metadata && user.user_metadata.semester) || "",
+      section: ""
+    };
   }
 
   function getProfilePhoto() {
@@ -1938,6 +2037,7 @@ function getRemoteSession() {
       student_id: source.studentId || "",
       course: source.course || "",
       year: source.year || "",
+      semester: source.semester || "",
       section: source.section || "",
       contact: source.contact || "",
       birthdate: source.birthdate || null,
@@ -1959,6 +2059,7 @@ function getRemoteSession() {
       studentId: current.student_id || "",
       course: current.course || "",
       year: current.year || "",
+      semester: current.semester || "",
       section: current.section || "",
       contact: current.contact || "",
       birthdate: current.birthdate || "",
@@ -1985,6 +2086,8 @@ function getRemoteSession() {
       throw response.error;
     }
     remoteProfile = remoteRowToProfile(response.data, user);
+    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
+    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
     return remoteProfile;
   }
 
@@ -2008,7 +2111,7 @@ function getRemoteSession() {
   }
 
   // ===== AUTH functions =====
-  async function signup(name, email, password, studentId, year, section) {
+  async function signup(name, email, password, studentId, year, semester, section) {
     console.log("[ClassConnect] Signup requested for:", email);
 
     if (!isSupabaseReady()) {
@@ -2021,6 +2124,7 @@ function getRemoteSession() {
     var cleanSection = normalizeSection(section || "");
     var cleanStudentId = (studentId || "").trim();
     var cleanYear = (year || "").trim();
+      var cleanSemester = (semester || "").trim();
     var cleanName = name.trim();
 
     try {
@@ -2035,6 +2139,7 @@ function getRemoteSession() {
               name: cleanName,
               student_id: cleanStudentId,
               year: cleanYear,
+              semester: cleanSemester,
               section: cleanSection,
             },
           },
@@ -2062,6 +2167,7 @@ function getRemoteSession() {
           name: cleanName,
           studentId: cleanStudentId,
           year: cleanYear,
+            semester: cleanSemester,
           section: cleanSection,
         });
 
@@ -2665,7 +2771,6 @@ function getRemoteSession() {
             description: "Daily schedule digests, class reminders, and assignment alerts",
             importance: 5,
             visibility: 1,
-            sound: "beep.wav",
             vibration: true
           });
         } catch (e) {
@@ -2852,6 +2957,7 @@ function getRemoteSession() {
                   channelId: "classconnect_reminders",
                   smallIcon: "ic_launcher",
                   iconColor: "#2563EB",
+                  schedule: { at: new Date(Date.now() + 100), allowWhileIdle: true },
                   extra: {
                     view: options.view || "view-home"
                   }
@@ -2903,31 +3009,192 @@ function getRemoteSession() {
       }
     }
 
+    // ===== ACADEMIC TERM RESOLUTION & SCHEDULE FILTERING =====
+    function normalizeYearName(str) {
+      if (!str) return "";
+      var s = str.trim();
+      if (/all/i.test(s)) return "All Years";
+      if (/^1(st)?/i.test(s)) return "1st Year";
+      if (/^2(nd)?/i.test(s)) return "2nd Year";
+      if (/^3(rd)?/i.test(s)) return "3rd Year";
+      if (/^4(th)?/i.test(s)) return "4th Year";
+      if (/^5(th)?/i.test(s)) return "5th Year";
+      if (/^\d+$/.test(s)) {
+        var suff = s === "1" ? "st" : s === "2" ? "nd" : s === "3" ? "rd" : "th";
+        return s + suff + " Year";
+      }
+      return s;
+    }
+
+    function normalizeSemName(str) {
+      if (!str) return "";
+      var s = str.trim();
+      if (/all/i.test(s)) return "All Semesters";
+      if (/summer|midyear/i.test(s)) return "Summer / Midyear";
+      if (/1(st)?/i.test(s)) return "1st Semester";
+      if (/2(nd)?/i.test(s)) return "2nd Semester";
+      return s;
+    }
+
+    function getActiveAcademicTerm(subjects) {
+      var profile = (typeof getProfile === "function") ? getProfile() : {};
+      var user = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
+
+      // The schedule page filters are for browsing and must never silently
+      // change the term used by notifications.
+      // The profile is the source of truth in Supabase. localStorage is only a
+      // fast startup copy while the profile request is being restored.
+      var localYear = localStorage.getItem("cc_active_year") || "";
+      var localSem = localStorage.getItem("cc_active_semester") || "";
+
+      var profYear = (profile && profile.year) || (user && user.year) || (user && user.user_metadata && user.user_metadata.year) || "";
+      var profSem = (profile && profile.semester) || (user && user.semester) || (user && user.user_metadata && user.user_metadata.semester) || "";
+
+      var chosenYear = localYear || profYear;
+      var chosenSem = localSem || profSem;
+      chosenYear = normalizeYearName(chosenYear);
+      chosenSem = normalizeSemName(chosenSem);
+
+      var isAllY = chosenYear === "All Years";
+      var isAllS = chosenSem === "All Semesters";
+      var isConfigured = !!chosenYear && !!chosenSem && !isAllY && !isAllS;
+
+      var label = "";
+      if (!isConfigured) {
+        label = "Select your current year & semester";
+      } else if (isAllY && isAllS) {
+        label = "All Registered Subjects";
+      } else if (isAllY) {
+        label = chosenSem;
+      } else if (isAllS) {
+        label = chosenYear;
+      } else {
+        label = chosenYear + " \u2022 " + chosenSem;
+      }
+
+      return {
+        year: chosenYear || "",
+        semester: chosenSem || "",
+        isAllYears: isAllY,
+        isAllSems: isAllS,
+        isConfigured: isConfigured,
+        label: label
+      };
+    }
+
+    function filterSubjectsForActiveTerm(subjects, activeTerm) {
+      if (!subjects || subjects.length === 0) return [];
+      if (!activeTerm) return subjects;
+      if (activeTerm.isConfigured === false) return [];
+
+      if (activeTerm.isAllYears && activeTerm.isAllSems) return subjects;
+
+      var normYear = (!activeTerm.isAllYears && activeTerm.year && activeTerm.year !== "All Years")
+        ? (activeTerm.year || "").toLowerCase().replace(/[^0-9]/g, "")
+        : "";
+      var normSem = (!activeTerm.isAllSems && activeTerm.semester && activeTerm.semester !== "All Semesters")
+        ? (activeTerm.semester || "").toLowerCase().replace(/[^0-9a-z]/g, "")
+        : "";
+
+      var filtered = subjects.filter(function (s) {
+        var sYear = normalizeYearName(s.year || "");
+        var sSem = normalizeSemName(s.semester || "");
+        var matchYear = !normYear || normalizeYearName(sYear).toLowerCase() === normalizeYearName(activeTerm.year).toLowerCase();
+        var matchSem = !normSem || normalizeSemName(sSem).toLowerCase() === normalizeSemName(activeTerm.semester).toLowerCase();
+        return matchYear && matchSem;
+      });
+
+      return filtered;
+    }
+
+    function updateScheduleActiveTermBadge(subjects) {
+      try {
+        var active = getActiveAcademicTerm(subjects);
+        var label = active.label || (active.year + " \u2022 " + active.semester);
+
+        var badgeText = document.getElementById("schedule-active-term-text");
+        if (badgeText) badgeText.textContent = label;
+
+        var settingsLabel = document.getElementById("settings-active-term-label");
+        if (settingsLabel) {
+          settingsLabel.textContent = active.isConfigured ? label : "Set term above";
+        }
+
+        var settingsYearSelect = document.getElementById("settings-active-year-select");
+        if (settingsYearSelect && active.year) {
+          settingsYearSelect.value = active.isAllYears ? "all" : active.year;
+        }
+
+        var settingsSemSelect = document.getElementById("settings-active-sem-select");
+        if (settingsSemSelect && active.semester) {
+          settingsSemSelect.value = active.isAllSems ? "all" : active.semester;
+        }
+      } catch (e) {
+        console.warn("[ClassConnect] Term badge update error:", e);
+      }
+    }
+
     function parseDaysFromText(text) {
       if (!text) return [];
-      var str = text.toUpperCase()
-        .replace(/\b(\d{1,2}(:\d{2})?\s*(AM|PM|NN)?)\b/gi, "")
-        .replace(/\b(AM|PM|NN)\b/gi, "");
+      var raw = text.toUpperCase();
+
+      // Clean obvious time stamps so letters in numbers don't conflict
+      var cleaned = raw
+        .replace(/\b\d{1,2}(:\d{2})?\s*(AM|PM|NN)\b/g, "")
+        .replace(/\b\d{1,2}-\d{1,2}(AM|PM|NN)\b/g, "")
+        .replace(/\b(AM|PM|NN)\b/g, "");
+
       var days = new Set();
-      if (str.indexOf("DAILY") !== -1 || str.indexOf("EVERYDAY") !== -1) return [0, 1, 2, 3, 4, 5, 6];
+      if (/DAILY|EVERYDAY/i.test(cleaned)) return [0, 1, 2, 3, 4, 5, 6];
 
-      if (str.indexOf("SUNDAY") !== -1 || /\bSUN\b/.test(str)) { days.add(0); str = str.replace(/SUNDAY|\bSUN\b/g, ""); }
-      if (str.indexOf("MONDAY") !== -1 || /\bMON\b/.test(str)) { days.add(1); str = str.replace(/MONDAY|\bMON\b/g, ""); }
-      if (str.indexOf("TUESDAY") !== -1 || /\bTUE\b/.test(str)) { days.add(2); str = str.replace(/TUESDAY|\bTUE\b/g, ""); }
-      if (str.indexOf("WEDNESDAY") !== -1 || /\bWED\b/.test(str)) { days.add(3); str = str.replace(/WEDNESDAY|\bWED\b/g, ""); }
-      if (str.indexOf("THURSDAY") !== -1 || /\bTHU\b/.test(str) || /\bTH\b/.test(str)) { days.add(4); str = str.replace(/THURSDAY|\bTHU\b|\bTH\b/g, ""); }
-      if (str.indexOf("FRIDAY") !== -1 || /\bFRI\b/.test(str)) { days.add(5); str = str.replace(/FRIDAY|\bFRI\b/g, ""); }
-      if (str.indexOf("SATURDAY") !== -1 || /\bSAT\b/.test(str)) { days.add(6); str = str.replace(/SATURDAY|\bSAT\b/g, ""); }
+      var dayCodeMap = {
+        "SUNDAY": 0, "SUN": 0, "SU": 0, "U": 0,
+        "MONDAY": 1, "MON": 1, "M": 1,
+        "TUESDAY": 2, "TUES": 2, "TUE": 2, "T": 2,
+        "WEDNESDAY": 3, "WEDN": 3, "WED": 3, "W": 3,
+        "THURSDAY": 4, "THURS": 4, "THUR": 4, "THU": 4, "TH": 4, "H": 4,
+        "FRIDAY": 5, "FRI": 5, "F": 5,
+        "SATURDAY": 6, "SAT": 6, "S": 6
+      };
 
-      var tokens = str.split(/[\s,\/|-]+/);
+      // Range pattern: Day1 - Day2 (e.g. Wednesday - Thursday, Mon-Fri)
+      var rangeMatch = cleaned.match(/(SUNDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUN|MON|TUES|TUE|WEDN|WED|THURS|THUR|THU|TH|FRI|SAT|\b[MTWHFSU]\b)\s*(?:-|–|—|\bTO\b)\s*(SUNDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUN|MON|TUES|TUE|WEDN|WED|THURS|THUR|THU|TH|FRI|SAT|\b[MTWHFSU]\b)/);
+      if (rangeMatch) {
+        var startD = dayCodeMap[rangeMatch[1]];
+        var endD = dayCodeMap[rangeMatch[2]];
+        if (typeof startD === "number" && typeof endD === "number") {
+          if (startD <= endD) {
+            for (var d = startD; d <= endD; d++) days.add(d);
+          } else {
+            for (var d1 = startD; d1 <= 6; d1++) days.add(d1);
+            for (var d2 = 0; d2 <= endD; d2++) days.add(d2);
+          }
+        }
+      }
+
+      // Word-level checks
+      if (/SUNDAY|\bSUN\b/i.test(cleaned)) days.add(0);
+      if (/MONDAY|\bMON\b/i.test(cleaned)) days.add(1);
+      if (/TUESDAY|\bTUES\b|\bTUE\b/i.test(cleaned)) days.add(2);
+      if (/WEDNESDAY|\bWEDN\b|\bWED\b/i.test(cleaned)) days.add(3);
+      if (/THURSDAY|\bTHURS\b|\bTHUR\b|\bTHU\b|\bTH\b/i.test(cleaned)) days.add(4);
+      if (/FRIDAY|\bFRI\b/i.test(cleaned)) days.add(5);
+      if (/SATURDAY|\bSAT\b/i.test(cleaned)) days.add(6);
+
+      // Common schedule combinations
+      if (/\bMWF\b/.test(cleaned) || cleaned.indexOf("M-W-F") !== -1 || cleaned.indexOf("M/W/F") !== -1) { days.add(1); days.add(3); days.add(5); }
+      if (/\bTTH\b/.test(cleaned) || cleaned.indexOf("T-TH") !== -1 || cleaned.indexOf("T/TH") !== -1) { days.add(2); days.add(4); }
+      if (/\bTWTH\b/.test(cleaned) || cleaned.indexOf("T-W-TH") !== -1 || cleaned.indexOf("T/W/TH") !== -1) { days.add(2); days.add(3); days.add(4); }
+      if (/\bWTH\b/.test(cleaned) || cleaned.indexOf("W-TH") !== -1 || cleaned.indexOf("W/TH") !== -1) { days.add(3); days.add(4); }
+      if (/\bFS\b/.test(cleaned)) { days.add(5); days.add(6); }
+      if (/\bSS\b/.test(cleaned)) { days.add(6); days.add(0); }
+
+      // Short letter groupings like TWTH, MTWH
+      var tokens = cleaned.split(/[\s,\/|–—\-]+/);
       tokens.forEach(function (token) {
         if (!token) return;
-        if (token === "MWF") { days.add(1); days.add(3); days.add(5); return; }
-        if (token === "TTH" || token === "T-TH") { days.add(2); days.add(4); return; }
-        if (token === "TWTH") { days.add(2); days.add(3); days.add(4); return; }
-        if (token === "WTH") { days.add(3); days.add(4); return; }
-        if (/^[MTWHFSU]+$/.test(token)) {
-          if (token.indexOf("TH") !== -1) { days.add(4); token = token.replace("TH", ""); }
+        if (/^[MTWHFSU]+$/.test(token) && token.length <= 7) {
+          if (token.indexOf("TH") !== -1) { days.add(4); token = token.replace(/TH/g, ""); }
           if (token.indexOf("H") !== -1) days.add(4);
           if (token.indexOf("M") !== -1) days.add(1);
           if (token.indexOf("T") !== -1) days.add(2);
@@ -2943,14 +3210,54 @@ function getRemoteSession() {
 
     function parseStartTimeToMinutes(text) {
       if (!text) return null;
-      var match = text.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i) || text.match(/(\d{1,2})\s*(AM|PM)/i);
-      if (!match) return null;
-      var hours = parseInt(match[1], 10);
-      var mins = match[2] && !isNaN(parseInt(match[2], 10)) ? parseInt(match[2], 10) : 0;
-      var meridiem = (match[3] || match[2] || "").toUpperCase();
-      if (meridiem === "PM" && hours < 12) hours += 12;
-      if (meridiem === "AM" && hours === 12) hours = 0;
-      return hours * 60 + mins;
+      var str = text.trim();
+      var t = str.replace(/noon/gi, "NN").replace(/midday/gi, "NN");
+
+      // Match time range start: e.g. "8-9am", "8:00-9:00am", "8am-10am", "1-4pm", "9-12nn"
+      var rangeMatch = t.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM|NN)?\s*(?:-|–|—|\bTO\b)\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|NN)?/i);
+      if (rangeMatch) {
+        var sHour = parseInt(rangeMatch[1], 10);
+        var sMin = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : 0;
+        var sMer = (rangeMatch[3] || "").toUpperCase();
+        var eHour = parseInt(rangeMatch[4], 10);
+        var eMer = (rangeMatch[6] || "").toUpperCase();
+
+        if (!sMer) {
+          if (eMer === "NN") {
+            sMer = sHour < 12 ? "AM" : "NN";
+          } else if (eMer === "PM") {
+            if (sHour >= 7 && sHour <= 11) sMer = "AM";
+            else sMer = "PM";
+          } else if (eMer === "AM") {
+            sMer = "AM";
+          } else {
+            sMer = (sHour >= 7 && sHour <= 11) ? "AM" : (sHour === 12 ? "NN" : "PM");
+          }
+        }
+
+        if (sMer === "PM" && sHour < 12) sHour += 12;
+        if (sMer === "AM" && sHour === 12) sHour = 0;
+        if (sMer === "NN") sHour = 12;
+
+        return sHour * 60 + sMin;
+      }
+
+      // Single time pattern
+      var singleMatch = t.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM|NN)?/i);
+      if (singleMatch) {
+        var h = parseInt(singleMatch[1], 10);
+        var m = singleMatch[2] ? parseInt(singleMatch[2], 10) : 0;
+        var mer = (singleMatch[3] || "").toUpperCase();
+        if (!mer) {
+          mer = (h >= 7 && h <= 11) ? "AM" : (h === 12 ? "NN" : (h < 7 ? "PM" : ""));
+        }
+        if (mer === "PM" && h < 12) h += 12;
+        if (mer === "AM" && h === 12) h = 0;
+        if (mer === "NN") h = 12;
+        return h * 60 + m;
+      }
+
+      return null;
     }
 
     function formatTime12h(timeStr) {
@@ -2965,21 +3272,26 @@ function getRemoteSession() {
     }
 
     function getTodayClasses(subjects, manualSchedule) {
-      var now = new Date();
-      var currentDay = now.getDay();
+      var now = getPhilippineNowParts();
+      var currentDay = now.dayIndex;
       var classes = [];
+      var seenMap = {};
 
       (subjects || []).forEach(function (s) {
         if (!s.schedule) return;
         var days = parseDaysFromText(s.schedule);
         if (days.indexOf(currentDay) !== -1) {
           var startMin = parseStartTimeToMinutes(s.schedule);
+          var key = (s.name || "").trim().toLowerCase();
+          seenMap[key] = true;
           classes.push({
             id: s.id,
             name: s.name,
             professor: s.professor || "",
             scheduleText: s.schedule,
             room: s.room || "",
+            year: s.year || "",
+            semester: s.semester || "",
             color: s.color || "#2563EB",
             startMin: startMin !== null ? startMin : 9999
           });
@@ -2990,8 +3302,10 @@ function getRemoteSession() {
         if (!m.day) return;
         var days = parseDaysFromText(m.day);
         if (days.indexOf(currentDay) !== -1) {
+          var key = (m.subject || "").trim().toLowerCase();
+          if (seenMap[key]) return; // Avoid duplicate if already pulled from subjects
           var startMin = m.start_time ? parseStartTimeToMinutes(m.start_time) : null;
-          var schedText = (m.start_time ? formatTime12h(m.start_time) : "") + (m.end_time ? " – " + formatTime12h(m.end_time) : "");
+          var schedText = (m.start_time ? formatTime12h(m.start_time) : "") + (m.end_time ? " \u2013 " + formatTime12h(m.end_time) : "");
           classes.push({
             id: m.id,
             name: m.subject || "Class Schedule",
@@ -3008,42 +3322,75 @@ function getRemoteSession() {
       return classes;
     }
 
+    function filterManualScheduleForActiveTerm(manualSchedule, activeSubjects, activeTerm) {
+      if (!activeTerm || activeTerm.isConfigured === false) return [];
+      var allowedSubjects = {};
+      (activeSubjects || []).forEach(function (subject) {
+        if (subject.name) allowedSubjects[subject.name.trim().toLowerCase()] = true;
+      });
+      return (manualSchedule || []).filter(function (item) {
+        var name = (item.subject || "").trim().toLowerCase();
+        // Manual rows predate year/semester columns, so their linked subject
+        // is the safe source of term ownership.
+        return !!name && !!allowedSubjects[name];
+      });
+    }
+
     async function checkScheduleNotifications() {
       if (!isLoggedIn()) return;
+      var currentUser = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
       var prefs = getPrefs();
       if (!prefs.enabled) return;
 
       try {
-        var results = await Promise.all([getSubjects().catch(function () { return []; }), getSchedule().catch(function () { return []; })]);
-        var subjects = results[0];
-        var manualSched = results[1];
-        var todayClasses = getTodayClasses(subjects, manualSched);
+        var results = await Promise.all([
+          getSubjects().catch(function () { return []; }),
+          getSchedule().catch(function () { return []; })
+        ]);
+        var allSubjects = results[0] || [];
+        var manualSched = results[1] || [];
 
-        var now = new Date();
-        var dateKey = now.toISOString().split("T")[0];
+        // Filter subjects based on current user's active academic year & semester
+        var activeTerm = getActiveAcademicTerm(allSubjects);
+        updateScheduleActiveTermBadge(allSubjects);
+        if (!activeTerm.isConfigured) return;
+        var subjects = filterSubjectsForActiveTerm(allSubjects, activeTerm);
+        var activeManualSched = filterManualScheduleForActiveTerm(manualSched, subjects, activeTerm);
+        var todayClasses = getTodayClasses(subjects, activeManualSched);
+
+        var now = getPhilippineNowParts();
+        var dateKey = getPhilippineDateKey();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        var dayName = dayNames[now.getDay()];
+        var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        var dayName = now.weekday;
+        var dateFormatted = dayName + ", " + monthNames[now.month - 1] + " " + now.day;
+        var termLabel = activeTerm.label;
 
-        // 1. Daily Morning Digest
+        // 1. Daily Morning Digest (keyed by date and active term to allow term changes)
         var userSuffix = (currentUser && currentUser.id) ? ("_" + currentUser.id) : "";
+        var termKeySuffix = "_" + (activeTerm.year || "any").replace(/\s+/g, "_") + "_" + (activeTerm.semester || "any").replace(/\s+/g, "_");
+
         if (prefs.scheduleDaily && todayClasses.length > 0) {
-          var digestKey = "cc_notif_digest_" + dateKey + userSuffix;
+          var digestKey = "cc_notif_digest_" + dateKey + termKeySuffix + userSuffix;
           if (!localStorage.getItem(digestKey)) {
-            var classSummary = todayClasses.map(function (c) { return c.name + (c.scheduleText ? " (" + c.scheduleText + ")" : ""); }).join(", ");
+            var classSummary = todayClasses.map(function (c) {
+              return c.name + (c.scheduleText ? " (" + c.scheduleText + ")" : "") + (c.room ? " [Room " + c.room + "]" : "");
+            }).join(", ");
+
             sendNotification(
-              "Today's Schedule — " + dayName,
-              "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today: " + classSummary,
+              "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
+              "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today (" + dateFormatted + "): " + classSummary,
               "schedule",
               { view: "view-schedule", tag: "cc_daily_digest" }
             );
             localStorage.setItem(digestKey, "true");
           }
         } else if (prefs.scheduleDaily && todayClasses.length === 0) {
-          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + userSuffix;
+          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + termKeySuffix + userSuffix;
           if (!localStorage.getItem(emptyDigestKey)) {
             sendNotification(
-              "Today's Schedule — " + dayName,
-              "No classes scheduled for today (" + dayName + "). Enjoy your day or review upcoming tasks!",
+              "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
+              "No classes scheduled for today (" + dateFormatted + ") under your " + termLabel + " subjects. Enjoy your free time!",
               "schedule",
               { view: "view-schedule", tag: "cc_daily_digest" }
             );
@@ -3051,13 +3398,13 @@ function getRemoteSession() {
           }
         }
 
-        // 2. Upcoming Class Alert (15-20 mins before start)
+        // 2. Upcoming Class Alert (within 30 minutes before start)
         if (prefs.scheduleUpcoming) {
-          var currentMin = now.getHours() * 60 + now.getMinutes();
+          var currentMin = now.hour * 60 + now.minute;
           todayClasses.forEach(function (c) {
             if (c.startMin < 9999) {
               var diff = c.startMin - currentMin;
-              if (diff >= 0 && diff <= 20) {
+              if (diff >= 0 && diff <= 30) {
                 var upcomingKey = "cc_notif_up_" + c.name.replace(/\s+/g, "_") + "_" + dateKey + "_" + c.startMin;
                 if (!localStorage.getItem(upcomingKey)) {
                   var timeDesc = diff === 0 ? "starting now" : "starting in " + diff + " minutes";
@@ -3078,19 +3425,116 @@ function getRemoteSession() {
       }
     }
 
+    async function blastScheduleNotifications(forceImmediate) {
+      if (!isLoggedIn()) {
+        showToast("Please log in to check your schedule notifications.", "warning");
+        return;
+      }
+      var currentUser = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
+
+      try {
+        var results = await Promise.all([
+          getSubjects().catch(function () { return []; }),
+          getSchedule().catch(function () { return []; })
+        ]);
+        var allSubjects = results[0] || [];
+        var manualSched = results[1] || [];
+
+        var activeTerm = getActiveAcademicTerm(allSubjects);
+        if (!activeTerm.isConfigured) {
+          updateScheduleActiveTermBadge(allSubjects);
+          showToast("Select your current year and semester before sending schedule alerts.", "warning");
+          return;
+        }
+        var subjects = filterSubjectsForActiveTerm(allSubjects, activeTerm);
+        var activeManualSched = filterManualScheduleForActiveTerm(manualSched, subjects, activeTerm);
+        var todayClasses = getTodayClasses(subjects, activeManualSched);
+
+        var now = getPhilippineNowParts();
+        var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        var dayName = now.weekday;
+        var dateFormatted = dayName + ", " + monthNames[now.month - 1] + " " + now.day;
+        var termLabel = activeTerm.label;
+
+        updateScheduleActiveTermBadge(allSubjects);
+        playChime();
+        vibrate([150, 80, 150]);
+
+        if (todayClasses.length > 0) {
+          var summary = todayClasses.map(function (c) {
+            return c.name + (c.scheduleText ? " (" + c.scheduleText + ")" : "") + (c.room ? " [Room " + c.room + "]" : "");
+          }).join(", ");
+
+          sendNotification(
+            "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
+            "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today (" + dateFormatted + "): " + summary,
+            "schedule",
+            { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now() }
+          );
+          showToast("Blasted schedule alert for " + todayClasses.length + " classes (" + termLabel + ")!", "success");
+        } else {
+          sendNotification(
+            "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
+            "No classes scheduled for today (" + dateFormatted + ") under your " + termLabel + " subjects. Enjoy your free time!",
+            "schedule",
+            { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now() }
+          );
+          showToast("No classes scheduled today for " + termLabel + ". Notification blasted!", "info");
+        }
+
+        renderNotificationCenter();
+        updateTopnavBadge();
+      } catch (err) {
+        console.error("[ClassConnect] Blast schedule error:", err);
+        showToast("Error checking schedule notifications: " + err.message, "error");
+      }
+    }
+
+    function filterAssignmentsForActiveTerm(assignments, activeTerm, subjects) {
+      if (!activeTerm || !activeTerm.isConfigured) return [];
+      var subjectTerms = {};
+      (subjects || []).forEach(function (subject) {
+        if (!subject.name) return;
+        subjectTerms[subject.name.trim().toLowerCase()] = {
+          year: normalizeYearName(subject.year || ""),
+          semester: normalizeSemName(subject.semester || "")
+        };
+      });
+
+      return (assignments || []).filter(function (assignment) {
+        var explicitYear = assignment.year || assignment.year_level || "";
+        var explicitSemester = assignment.semester || "";
+        if (explicitYear || explicitSemester) {
+          return normalizeYearName(explicitYear) === normalizeYearName(activeTerm.year) &&
+            normalizeSemName(explicitSemester) === normalizeSemName(activeTerm.semester);
+        }
+
+        var linked = subjectTerms[(assignment.subject || "").trim().toLowerCase()];
+        // Legacy assignments without term columns are only eligible when the
+        // subject they reference is in the selected term. Unknown/general
+        // assignments are intentionally not notified to avoid false alerts.
+        return !!linked &&
+          linked.year === normalizeYearName(activeTerm.year) &&
+          linked.semester === normalizeSemName(activeTerm.semester);
+      });
+    }
+
     async function checkAssignmentNotifications() {
       if (!isLoggedIn()) return;
       var prefs = getPrefs();
       if (!prefs.enabled || !prefs.assignments) return;
 
       try {
-        var assignments = await getAssignments().catch(function () { return []; });
+        var results = await Promise.all([
+          getAssignments().catch(function () { return []; }),
+          getSubjects().catch(function () { return []; })
+        ]);
+        var activeTerm = getActiveAcademicTerm(results[1] || []);
+        var assignments = filterAssignmentsForActiveTerm(results[0] || [], activeTerm, results[1] || []);
         var uncompleted = assignments.filter(function (a) { return !a.completed; });
-        var now = new Date();
-        var todayKey = now.toISOString().split("T")[0];
-        
-        var tomorrow = new Date(now.getTime() + 86400000);
-        var tmrwKey = tomorrow.toISOString().split("T")[0];
+        var todayKey = getPhilippineDateKey();
+        var tmrwKey = getPhilippineDateKey(1);
 
         uncompleted.forEach(function (a) {
           if (!a.due_date) return;
@@ -3316,6 +3760,13 @@ function getRemoteSession() {
       if (testBtn1) testBtn1.addEventListener("click", sendTestNotification);
       if (testBtn2) testBtn2.addEventListener("click", sendTestNotification);
 
+      var blastViewBtn = document.getElementById("blast-schedule-view-btn");
+      var blastSettingsBtn = document.getElementById("settings-blast-schedule-btn");
+      var blastModalBtn = document.getElementById("notif-modal-blast-schedule-btn");
+      if (blastViewBtn) blastViewBtn.addEventListener("click", function () { blastScheduleNotifications(true); });
+      if (blastSettingsBtn) blastSettingsBtn.addEventListener("click", function () { blastScheduleNotifications(true); });
+      if (blastModalBtn) blastModalBtn.addEventListener("click", function () { blastScheduleNotifications(true); });
+
       var notifSettingsBtn = document.getElementById("notif-open-settings-btn");
       if (notifSettingsBtn) {
         notifSettingsBtn.addEventListener("click", function () {
@@ -3346,6 +3797,35 @@ function getRemoteSession() {
       bindToggle("notif-pref-vibration", "vibration");
       bindToggle("notif-pref-sound", "sound");
 
+      var settingsYearSel = document.getElementById("settings-active-year-select");
+      if (settingsYearSel) {
+        settingsYearSel.addEventListener("change", function () {
+          var y = settingsYearSel.value;
+          localStorage.setItem("cc_active_year", y);
+          updateScheduleActiveTermBadge();
+          var schedYearBtns = document.querySelectorAll(".schedule-year-filter");
+          schedYearBtns.forEach(function (b) {
+            if (b.getAttribute("data-year") === y) b.classList.add("active");
+            else b.classList.remove("active");
+          });
+          checkScheduleNotifications();
+        });
+      }
+
+      var settingsSemSel = document.getElementById("settings-active-sem-select");
+      if (settingsSemSel) {
+        settingsSemSel.addEventListener("change", function () {
+          var s = settingsSemSel.value;
+          localStorage.setItem("cc_active_semester", s);
+          updateScheduleActiveTermBadge();
+          var schedSemFilter = document.getElementById("schedule-semester-filter");
+          if (schedSemFilter) {
+            schedSemFilter.value = s;
+          }
+          checkScheduleNotifications();
+        });
+      }
+
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker.addEventListener("message", function (event) {
           if (event.data && event.data.type === "NAVIGATE_VIEW" && event.data.view) {
@@ -3370,14 +3850,21 @@ function getRemoteSession() {
         updatePermissionUI();
         updateTopnavBadge();
         updateAppBadge();
+        updateScheduleActiveTermBadge();
         autoPromptPermissionIfNeeded();
       },
       autoPromptPermissionIfNeeded: autoPromptPermissionIfNeeded,
       updatePermissionUI: updatePermissionUI,
       updateTopnavBadge: updateTopnavBadge,
       updateAppBadge: updateAppBadge,
+      updateScheduleActiveTermBadge: updateScheduleActiveTermBadge,
+      getActiveAcademicTerm: getActiveAcademicTerm,
+      filterSubjectsForActiveTerm: filterSubjectsForActiveTerm,
+      getTodayClasses: getTodayClasses,
+      parseDaysFromText: parseDaysFromText,
       renderNotificationCenter: renderNotificationCenter,
       checkScheduleNotifications: checkScheduleNotifications,
+      blastScheduleNotifications: blastScheduleNotifications,
       checkAssignmentNotifications: checkAssignmentNotifications,
       checkNewPosts: checkNewPosts,
       runAllReminderChecks: runAllReminderChecks,
@@ -3403,6 +3890,7 @@ function getRemoteSession() {
         vibrate([80, 40, 80]);
       },
       onScheduleUpdated: function () {
+        updateScheduleActiveTermBadge();
         checkScheduleNotifications();
       },
       onPostCreated: function (post) {
@@ -3410,6 +3898,7 @@ function getRemoteSession() {
       }
     };
   })();
+  window.DeviceNotificationManager = DeviceNotificationManager;
 
 
   // ===== LOAD FUNCTIONS =====
@@ -4060,13 +4549,34 @@ function getRemoteSession() {
       DeviceNotificationManager.checkScheduleNotifications();
 
       var schedYearBtn = document.querySelector(".schedule-year-filter.active");
-      var schedFilterYear = schedYearBtn ? schedYearBtn.getAttribute("data-year") : "all";
+       var schedFilterYear = schedYearBtn ? schedYearBtn.getAttribute("data-year") : (localStorage.getItem("cc_schedule_filter_year") || localStorage.getItem("cc_active_year") || "all");
       var schedSemEl = document.getElementById("schedule-semester-filter");
-      var schedFilterSem = schedSemEl ? schedSemEl.value : "all";
+       var schedFilterSem = schedSemEl ? schedSemEl.value : (localStorage.getItem("cc_schedule_filter_semester") || localStorage.getItem("cc_active_semester") || "all");
+
+      // If set to "all" and user hasn't explicitly chosen "all", inspect database subjects
+      if (schedFilterYear === "all" && schedFilterSem === "all" && !localStorage.getItem("cc_user_chose_all") && allSubjects.length > 0) {
+        if (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function") {
+          var detectedTerm = window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects);
+          if (detectedTerm && detectedTerm.year && detectedTerm.year !== "All Years") {
+            schedFilterYear = detectedTerm.year;
+            var matchBtn = document.querySelector('.schedule-year-filter[data-year="' + schedFilterYear + '"]');
+            if (matchBtn) {
+              document.querySelectorAll(".schedule-year-filter").forEach(function (b) { b.classList.remove("active"); });
+              matchBtn.classList.add("active");
+            }
+          }
+          if (detectedTerm && detectedTerm.semester && detectedTerm.semester !== "All Semesters") {
+            schedFilterSem = detectedTerm.semester;
+            if (schedSemEl) schedSemEl.value = schedFilterSem;
+          }
+        }
+      }
 
       var filteredSubjects = allSubjects.filter(function (s) {
-        var yMatch = (schedFilterYear === "all" || (s.year || "1st Year") === schedFilterYear);
-        var sMatch = (schedFilterSem === "all" || (s.semester || "1st Semester") === schedFilterSem);
+        var sYear = (s.year || "").trim();
+        var sSem = (s.semester || "").trim();
+        var yMatch = (schedFilterYear === "all" || sYear === schedFilterYear || !sYear);
+        var sMatch = (schedFilterSem === "all" || sSem === schedFilterSem || !sSem);
         return yMatch && sMatch;
       });
 
@@ -4283,13 +4793,15 @@ function getRemoteSession() {
 
   function isDueSoon(dueDate) {
     if (!dueDate) return false;
-    var diff = (new Date(dueDate) - new Date()) / 86400000;
+    var dueKey = String(dueDate).slice(0, 10);
+    var todayKey = getPhilippineDateKey();
+    var diff = Math.floor((Date.parse(dueKey + "T00:00:00Z") - Date.parse(todayKey + "T00:00:00Z")) / 86400000);
     return diff >= 0 && diff <= 3;
   }
 
   function isOverdue(dueDate) {
     if (!dueDate) return false;
-    return new Date(dueDate) < new Date();
+    return compareDateKeys(String(dueDate).slice(0, 10), getPhilippineDateKey()) < 0;
   }
 
   // ===== GRADES LOAD =====
@@ -5066,20 +5578,49 @@ function getRemoteSession() {
 
   function setupScheduleFilters() {
     var filters = document.querySelectorAll(".schedule-year-filter");
+    var savedYear = localStorage.getItem("cc_schedule_filter_year") || localStorage.getItem("cc_active_year");
+    if (savedYear) {
+      filters.forEach(function (b) {
+        var by = b.getAttribute("data-year");
+        if (by === savedYear || (savedYear === "All Years" && by === "all")) {
+          b.classList.add("active");
+        } else {
+          b.classList.remove("active");
+        }
+      });
+    }
+
+    var semSelect = document.getElementById("schedule-semester-filter");
+    var savedSem = localStorage.getItem("cc_schedule_filter_semester") || localStorage.getItem("cc_active_semester");
+    if (semSelect && savedSem) {
+      semSelect.value = (savedSem === "All Semesters") ? "all" : savedSem;
+    }
+
     filters.forEach(function (btn) {
       if (!btn._ccBound) {
         btn._ccBound = true;
         btn.addEventListener("click", function () {
           filters.forEach(function (b) { b.classList.remove("active"); });
           btn.classList.add("active");
+          var y = btn.getAttribute("data-year");
+          localStorage.setItem("cc_schedule_filter_year", y === "all" ? "all" : y);
+
+          if (window.DeviceNotificationManager) {
+            window.DeviceNotificationManager.updateScheduleActiveTermBadge();
+            window.DeviceNotificationManager.checkScheduleNotifications();
+          }
           loadSchedule();
         });
       }
     });
-    var semSelect = document.getElementById("schedule-semester-filter");
+
     if (semSelect && !semSelect._ccBound) {
       semSelect._ccBound = true;
-      semSelect.addEventListener("change", function () { loadSchedule(); });
+      semSelect.addEventListener("change", function () {
+        var s = semSelect.value;
+        localStorage.setItem("cc_schedule_filter_semester", s);
+        loadSchedule();
+      });
     }
   }
 
@@ -5540,8 +6081,46 @@ function getRemoteSession() {
     const settings = getSettings();
     const fontSelect = document.getElementById("font-type-select");
     if (fontSelect) fontSelect.value = settings.fontType || "sans-serif";
+    var profile = getProfile();
+    var activeYear = localStorage.getItem("cc_active_year") || profile.year || "";
+    var activeSemester = localStorage.getItem("cc_active_semester") || profile.semester || "";
+    var activeYearSelect = document.getElementById("settings-active-year-select");
+    var activeSemesterSelect = document.getElementById("settings-active-sem-select");
+    if (activeYearSelect && activeYear) activeYearSelect.value = activeYear;
+    if (activeSemesterSelect && activeSemester) activeSemesterSelect.value = activeSemester;
     applySettings(settings);
     updateStorageDisplay();
+  }
+
+  async function saveActiveTermSelection(year, semester) {
+    var allowedYears = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
+    var allowedSemesters = ["1st Semester", "2nd Semester", "Summer / Midyear"];
+    if (allowedYears.indexOf(year) === -1 || allowedSemesters.indexOf(semester) === -1) {
+      throw new Error("Please select both your current year level and semester.");
+    }
+
+    var previousYear = localStorage.getItem("cc_active_year");
+    var previousSemester = localStorage.getItem("cc_active_semester");
+    var previousScheduleYear = localStorage.getItem("cc_schedule_filter_year");
+    var previousScheduleSemester = localStorage.getItem("cc_schedule_filter_semester");
+    localStorage.setItem("cc_active_year", year);
+    localStorage.setItem("cc_active_semester", semester);
+    localStorage.setItem("cc_schedule_filter_year", year);
+    localStorage.setItem("cc_schedule_filter_semester", semester);
+
+    try {
+      await saveProfile({ year: year, semester: semester });
+    } catch (error) {
+      if (previousYear) localStorage.setItem("cc_active_year", previousYear);
+      else localStorage.removeItem("cc_active_year");
+      if (previousSemester) localStorage.setItem("cc_active_semester", previousSemester);
+      else localStorage.removeItem("cc_active_semester");
+      if (previousScheduleYear) localStorage.setItem("cc_schedule_filter_year", previousScheduleYear);
+      else localStorage.removeItem("cc_schedule_filter_year");
+      if (previousScheduleSemester) localStorage.setItem("cc_schedule_filter_semester", previousScheduleSemester);
+      else localStorage.removeItem("cc_schedule_filter_semester");
+      throw error;
+    }
   }
 
   // ===== PROFILE FORM =====
@@ -5555,6 +6134,7 @@ function getRemoteSession() {
       "profile-student-id": profile.studentId || "",
       "profile-course": profile.course || "",
       "profile-year": profile.year || "",
+      "profile-semester": profile.semester || "",
       "profile-section": profile.section || "",
       "profile-contact": profile.contact || "",
       "profile-birthdate": profile.birthdate || "",
@@ -5993,6 +6573,8 @@ function getRemoteSession() {
   // ================================================================
   // ===== SECRET RESET PASSWORD PAGE & DEEP LINK HANDLING =====
   // ================================================================
+  var activeSupabaseRecovery = null;
+  var recoveryLinkHandled = false;
 
   function extractResetTokenFromUrl(urlStr) {
     if (!urlStr) return null;
@@ -6011,11 +6593,77 @@ function getRemoteSession() {
     }
   }
 
+  function extractPasswordRecoveryFromUrl(urlStr) {
+    if (!urlStr) return null;
+    try {
+      var fakeUrl = urlStr.replace(/^([a-zA-Z0-9._-]+):\/\//, "https://dummy.host/");
+      var parsed = new URL(fakeUrl, window.location.origin);
+      var params = new URLSearchParams(parsed.search || "");
+      if (parsed.hash) {
+        new URLSearchParams(parsed.hash.replace(/^#/, "")).forEach(function (value, key) {
+          if (!params.has(key)) params.set(key, value);
+        });
+      }
+      var token = params.get("reset_token") || params.get("token");
+      var accessToken = params.get("access_token");
+      var refreshToken = params.get("refresh_token");
+      var code = params.get("code");
+      if (!token && !accessToken && !refreshToken && !code) return null;
+      return {
+        token: token ? token.trim() : "",
+        accessToken: accessToken || "",
+        refreshToken: refreshToken || "",
+        code: code || ""
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function getResetRedirectUrl() {
+    var isNative = typeof window.Capacitor !== "undefined" &&
+      typeof window.Capacitor.isNativePlatform === "function" &&
+      window.Capacitor.isNativePlatform();
+    return isNative ? "classconnect://reset-password" : window.location.origin + window.location.pathname;
+  }
+
+  function handlePasswordRecoveryUrl(urlStr) {
+    var recovery = extractPasswordRecoveryFromUrl(urlStr);
+    if (!recovery) return false;
+    recoveryLinkHandled = true;
+    window.__classConnectRecoveryHandled = true;
+
+    if (recovery.token) {
+      activeSupabaseRecovery = null;
+      showResetPasswordPage(recovery.token);
+      return true;
+    }
+
+    activeSupabaseRecovery = recovery;
+    var client = getSupabaseClient();
+    var sessionPromise = recovery.code
+      ? client.auth.exchangeCodeForSession(recovery.code)
+      : client.auth.setSession({
+          access_token: recovery.accessToken,
+          refresh_token: recovery.refreshToken
+        });
+
+    sessionPromise.then(function (result) {
+      if (result && result.error) throw result.error;
+      showResetPasswordPage(null, recovery);
+    }).catch(function (error) {
+      console.error("[ClassConnect] Supabase recovery link could not be opened:", error);
+      activeSupabaseRecovery = null;
+      showResetPasswordPage(null);
+    });
+    return true;
+  }
+
   function getResetToken() {
     return extractResetTokenFromUrl(window.location.href);
   }
 
-  function showResetPasswordPage(token) {
+  function showResetPasswordPage(token, recovery) {
     console.log("[ClassConnect] Routing to secret reset page. Has token:", !!token);
 
     closeDrawer();
@@ -6038,7 +6686,7 @@ function getRemoteSession() {
     hideError("reset-page-error");
     hideError("reset-page-success");
 
-    if (token) {
+    if (token || recovery || activeSupabaseRecovery) {
       if (tokenField) tokenField.value = token;
       if (resetForm) resetForm.style.display = "flex";
       if (expiredState) expiredState.style.display = "none";
@@ -6160,6 +6808,7 @@ function getRemoteSession() {
         var emailInput     = document.getElementById("signup-email");
         var studentIdInput = document.getElementById("signup-student-id");
         var yearInput      = document.getElementById("signup-year");
+        var semesterInput  = document.getElementById("signup-semester");
         var sectionInput   = document.getElementById("signup-section");
         var passwordInput  = document.getElementById("signup-password");
         var confirmInput   = document.getElementById("signup-confirm");
@@ -6167,6 +6816,7 @@ function getRemoteSession() {
         var email     = emailInput     ? (emailInput.value     || "").trim() : "";
         var studentId = studentIdInput ? (studentIdInput.value || "").trim() : "";
         var year      = yearInput      ? (yearInput.value      || "")        : "";
+        var semester  = semesterInput  ? (semesterInput.value  || "")        : "";
         var section   = sectionInput   ? (sectionInput.value   || "").trim() : "";
         var password  = passwordInput  ? (passwordInput.value  || "")        : "";
         var confirm   = confirmInput   ? (confirmInput.value   || "")        : "";
@@ -6174,6 +6824,7 @@ function getRemoteSession() {
         if (!isValidEmail(email)){ showError("signup-error", "Please enter a valid email address."); return; }
         if (!studentId)          { showError("signup-error", "Please enter your Student ID number."); return; }
         if (!year)               { showError("signup-error", "Please select your year level."); return; }
+        if (semesterInput && !semester) { showError("signup-error", "Please select your current semester."); return; }
         if (!section)            { showError("signup-error", "Please enter your section (e.g. BSIT 3-A)."); return; }
         if (password.length < 6) { showError("signup-error", "Password must be at least 6 characters."); return; }
         if (password !== confirm) { showError("signup-error", "Passwords do not match."); return; }
@@ -6181,7 +6832,7 @@ function getRemoteSession() {
         setButtonLoading(btn, true);
         try {
           var result = await withLoading(function () {
-            return signup(name, email, password, studentId, year, section);
+            return signup(name, email, password, studentId, year, semester, section);
           });
           setButtonLoading(btn, false);
           if (!result.success) { showError("signup-error", result.message); return; }
@@ -6364,7 +7015,11 @@ function getRemoteSession() {
               "Content-Type": "application/json",
               "Authorization": "Bearer " + SUPABASE_ANON_KEY,
             },
-            body: JSON.stringify({ email: email.trim().toLowerCase() }),
+            body: JSON.stringify({
+              email: email.trim().toLowerCase(),
+              redirect_to: getResetRedirectUrl(),
+              redirectTo: getResetRedirectUrl()
+            }),
           });
         })
           .then(function (response) { return response.json(); })
@@ -6408,7 +7063,8 @@ function getRemoteSession() {
         var newPwd = document.getElementById("reset-page-new-password").value;
         var confirmPwd = document.getElementById("reset-page-confirm-password").value;
 
-        if (!token) {
+        var recovery = activeSupabaseRecovery;
+        if (!token && !recovery) {
           showError("reset-page-error", "Reset token is missing or has expired. Please request a new link.");
           var exp = document.getElementById("reset-page-expired");
           if (exp) {
@@ -6431,6 +7087,15 @@ function getRemoteSession() {
         setButtonLoading(btn, true);
 
         withLoading(function () {
+          if (recovery) {
+            return getSupabaseClient().auth.updateUser({ password: newPwd }).then(function (response) {
+              return {
+                success: !response.error,
+                message: response.error ? response.error.message : "Password updated successfully!",
+                error: response.error || null
+              };
+            });
+          }
           return fetch(SUPABASE_URL + "/functions/v1/update-password", {
             method: "POST",
             headers: {
@@ -6438,9 +7103,8 @@ function getRemoteSession() {
               "Authorization": "Bearer " + SUPABASE_ANON_KEY,
             },
             body: JSON.stringify({ token: token, new_password: newPwd }),
-          });
+          }).then(function (response) { return response.json(); });
         })
-          .then(function (response) { return response.json(); })
           .then(function (result) {
             setButtonLoading(btn, false);
             if (result.success) {
@@ -6450,6 +7114,7 @@ function getRemoteSession() {
                 succEl.hidden = false;
               }
               showToast("Password updated! Redirecting to login...", "success");
+              activeSupabaseRecovery = null;
 
               setTimeout(function () {
                 if (window.history && window.history.replaceState) {
@@ -6457,6 +7122,9 @@ function getRemoteSession() {
                 }
                 showPage("login-page");
                 showLoginForm();
+                if (isSupabaseReady()) {
+                  getSupabaseClient().auth.signOut({ scope: "local" }).catch(function () {});
+                }
               }, 2000);
             } else {
               var msg = result.message || "Could not update password.";
@@ -7057,6 +7725,7 @@ function getRemoteSession() {
           studentId: (document.getElementById("profile-student-id").value || "").trim(),
           course: (document.getElementById("profile-course").value || "").trim(),
           year: document.getElementById("profile-year").value,
+          semester: (document.getElementById("profile-semester") ? document.getElementById("profile-semester").value : ""),
           section: normalizeSection(rawSec || ""),
           contact: (document.getElementById("profile-contact").value || "").trim(),
           birthdate: document.getElementById("profile-birthdate").value,
@@ -7070,6 +7739,10 @@ function getRemoteSession() {
         try {
           await withLoading(function () { return saveProfile(data); });
           loadDashboard();
+          if (window.DeviceNotificationManager) {
+            DeviceNotificationManager.updateScheduleActiveTermBadge();
+            DeviceNotificationManager.checkScheduleNotifications();
+          }
           showToast("Profile saved to Supabase successfully.", "success");
         } catch (error) {
           console.error("[ClassConnect] Profile form save failed:", error);
@@ -7116,6 +7789,31 @@ function getRemoteSession() {
         applySettings(settings);
         showToast("Font type updated.", "info");
       });
+    }
+
+    var activeYearSelect = document.getElementById("settings-active-year-select");
+    var activeSemesterSelect = document.getElementById("settings-active-sem-select");
+    if (activeYearSelect && activeSemesterSelect) {
+      var saveActiveTerm = function () {
+        var year = activeYearSelect.value;
+        var semester = activeSemesterSelect.value;
+        withLoading(function () {
+          return saveActiveTermSelection(year, semester);
+        }).then(function () {
+          if (window.DeviceNotificationManager) {
+            DeviceNotificationManager.updateScheduleActiveTermBadge();
+            DeviceNotificationManager.runAllReminderChecks();
+          }
+          loadSchedule();
+          loadAssignments();
+          showToast("Current year and semester saved to Supabase.", "success");
+        }).catch(function (error) {
+          loadSettings();
+          showToast(error.message || "Could not save your current academic term.", "error");
+        });
+      };
+      activeYearSelect.addEventListener("change", saveActiveTerm);
+      activeSemesterSelect.addEventListener("change", saveActiveTerm);
     }
 
     var changePwdBtn = document.getElementById("settings-change-password-btn");
@@ -7567,6 +8265,9 @@ function getRemoteSession() {
   function routeAfterSplash() {
     console.log("[ClassConnect] Splash timer completed; checking authentication.");
 
+    if (recoveryLinkHandled || window.__classConnectRecoveryHandled) return;
+    if (handlePasswordRecoveryUrl(window.location.href)) return;
+
     var resetToken = getResetToken();
     if (resetToken) {
       console.log("[ClassConnect] Reset token detected. Showing secret reset password page directly.");
@@ -7611,7 +8312,6 @@ function getRemoteSession() {
     var CURRENT_BUILD = 1;
     var GITHUB_RAW_URL = "https://raw.githubusercontent.com/hdalmino0011/Class-Connect-Native/main/version.json";
     var SERVER_API_URL = "/api/app-version";
-    var LOCAL_STATIC_URL = "version.json";
 
     var state = {
       isNative: false,
@@ -7623,15 +8323,26 @@ function getRemoteSession() {
       hasCheckedThisSession: false
     };
 
+    function normalizeVersion(v) {
+      if (!v) return [0, 0, 0];
+      var clean = String(v).trim().replace(/^[vV]/, "");
+      var parts = clean.split(/[.-]/);
+      var nums = [];
+      for (var i = 0; i < parts.length; i++) {
+        var n = parseInt(parts[i], 10);
+        if (!isNaN(n)) nums.push(n);
+      }
+      while (nums.length < 3) nums.push(0);
+      return nums.slice(0, 3);
+    }
+
     function compareVersions(v1, v2) {
       if (!v1 || !v2) return 0;
-      var p1 = v1.replace(/^v/i, "").split(".").map(function(n) { return parseInt(n, 10) || 0; });
-      var p2 = v2.replace(/^v/i, "").split(".").map(function(n) { return parseInt(n, 10) || 0; });
-      for (var i = 0; i < Math.max(p1.length, p2.length); i++) {
-        var num1 = p1[i] || 0;
-        var num2 = p2[i] || 0;
-        if (num1 > num2) return 1;
-        if (num1 < num2) return -1;
+      var p1 = normalizeVersion(v1);
+      var p2 = normalizeVersion(v2);
+      for (var i = 0; i < 3; i++) {
+        if (p1[i] > p2[i]) return 1;
+        if (p1[i] < p2[i]) return -1;
       }
       return 0;
     }
@@ -7733,11 +8444,10 @@ function getRemoteSession() {
     }
 
     async function fetchRemoteVersionInfo() {
-      var urls = [
-        GITHUB_RAW_URL + "?t=" + Date.now(),
-        SERVER_API_URL + "?t=" + Date.now(),
-        LOCAL_STATIC_URL + "?t=" + Date.now()
-      ];
+      var urls = [];
+      if (!state.isNative) urls.push(new URL("version.json", document.baseURI).href);
+      urls.push(SERVER_API_URL + "?t=" + Date.now());
+      urls.push(GITHUB_RAW_URL + "?t=" + Date.now());
 
       for (var i = 0; i < urls.length; i++) {
         try {
@@ -7791,10 +8501,14 @@ function getRemoteSession() {
           return { available: false, error: "Network error" };
         }
 
+        var comp = compareVersions(remote.version, state.currentVersion);
         var isNewer = false;
-        if (typeof remote.versionCode === "number" && typeof state.currentBuild === "number" && remote.versionCode > state.currentBuild) {
+
+        // An update is ONLY valid if remote version is strictly greater,
+        // or versions are equal and remote build code is higher.
+        if (comp > 0) {
           isNewer = true;
-        } else if (compareVersions(remote.version, state.currentVersion) > 0) {
+        } else if (comp === 0 && typeof remote.versionCode === "number" && typeof state.currentBuild === "number" && remote.versionCode > state.currentBuild) {
           isNewer = true;
         }
 
@@ -7802,14 +8516,19 @@ function getRemoteSession() {
           state.updateAvailable = true;
           state.updateInfo = remote;
           if (descElem) descElem.textContent = "Update v" + remote.version + " available!";
-          showUpdateModal(remote);
+
+          // If this update was already dismissed by the user in this version, do not pop up automatically on silent check
+          var dismissedVer = localStorage.getItem("cc_dismissed_update_ver");
+           if (!remote.forceUpdate && (!silent || dismissedVer !== String(remote.version))) {
+            showUpdateModal(remote);
+          }
           return { available: true, updateInfo: remote };
         } else {
           state.updateAvailable = false;
           state.updateInfo = null;
-          var now = new Date();
-          var timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          if (descElem) descElem.textContent = "Up to date • Checked at " + timeStr;
+           var now = getPhilippineNowParts();
+           var timeStr = String(now.hour).padStart(2, "0") + ":" + String(now.minute).padStart(2, "0");
+          if (descElem) descElem.textContent = "Up to date \u2022 Checked at " + timeStr;
           if (!silent) {
             showUpdateToast("You're using the latest version of ClassConnect (v" + state.currentVersion + ")");
           }
@@ -7852,9 +8571,10 @@ function getRemoteSession() {
       var btnCancel = document.getElementById("btn-cancel-app-update");
       var closeBtn = document.getElementById("close-update-modal-btn");
       var permBox = document.getElementById("update-perm-box");
+      var ghBtn = document.getElementById("btn-update-visit-github");
 
       if (currentElem) currentElem.textContent = "v" + state.currentVersion;
-      if (targetElem) targetElem.textContent = "v" + (info.version || "1.0.1");
+      if (targetElem) targetElem.textContent = "v" + (info.version || "1.0.0");
       if (subtitleElem && info.title) subtitleElem.textContent = info.title;
 
       if (notesList) {
@@ -7862,7 +8582,7 @@ function getRemoteSession() {
         var notes = info.releaseNotes || [
           "Performance improvements & faster loading",
           "Automatic in-app updater and cache clearing",
-          "Bug fixes and security updates"
+          "Bug fixes and schedule notification upgrades"
         ];
         notes.forEach(function (note) {
           var li = document.createElement("li");
@@ -7876,6 +8596,10 @@ function getRemoteSession() {
       if (progressText) progressText.textContent = "0%";
       if (statusText) statusText.textContent = "Preparing update package...";
       if (permBox) permBox.style.display = "none";
+      if (ghBtn) {
+        ghBtn.style.display = "none";
+        ghBtn.href = "#";
+      }
 
       if (btnConfirm) {
         btnConfirm.disabled = false;
@@ -7898,8 +8622,8 @@ function getRemoteSession() {
       state.isDownloading = true;
 
       var info = state.updateInfo || {
-        version: "1.0.1",
-        apkUrl: "https://github.com/hdalmino0011/Class-Connect-Native/releases/download/v1.0.1/app-debug.apk"
+        version: "1.0.0",
+        apkUrl: "https://github.com/hdalmino0011/Class-Connect-Native/releases/latest/download/app-debug.apk"
       };
 
       var btnConfirm = document.getElementById("btn-confirm-app-update");
@@ -7911,6 +8635,7 @@ function getRemoteSession() {
       var statusText = document.getElementById("update-progress-status-text");
       var sublabel = document.getElementById("update-progress-sublabel");
       var permBox = document.getElementById("update-perm-box");
+      var ghBtn = document.getElementById("btn-update-visit-github");
 
       if (btnConfirm) {
         btnConfirm.disabled = true;
@@ -7956,7 +8681,13 @@ function getRemoteSession() {
               if (statusText) statusText.textContent = "Launching package installer...";
               if (sublabel) sublabel.textContent = "Tap 'Install' when prompted. Cache will automatically clear upon restart.";
             } else if (evt.status === "error") {
-              if (statusText) statusText.textContent = "Update failed: " + (evt.error || "Network error");
+              var errMessage = evt.error || "Network error";
+              if (errMessage.indexOf("404") !== -1 || errMessage.indexOf("not found") !== -1) {
+                statusText.textContent = "Update package not found on server (HTTP 404). You may already have the latest release.";
+                 if (ghBtn) ghBtn.style.display = "none";
+              } else {
+                statusText.textContent = "Update failed: " + errMessage;
+              }
               if (btnConfirm) {
                 btnConfirm.disabled = false;
                 btnConfirm.innerHTML = '<i class="fas fa-rotate-right"></i> Retry Update';
@@ -7966,7 +8697,7 @@ function getRemoteSession() {
           });
 
           // Trigger download and installation
-          var apkUrl = info.apkUrl || "https://github.com/hdalmino0011/Class-Connect-Native/releases/download/v" + (info.version || "1.0.1") + "/app-debug.apk";
+          var apkUrl = info.apkUrl || "https://github.com/hdalmino0011/Class-Connect-Native/releases/latest/download/app-debug.apk";
           await plugin.downloadAndInstall({ url: apkUrl });
 
         } catch (nativeErr) {
@@ -7974,7 +8705,13 @@ function getRemoteSession() {
           if (nativeErr === "PERMISSION_REQUIRED" || (nativeErr && nativeErr.message === "PERMISSION_REQUIRED")) {
             if (permBox) permBox.style.display = "flex";
           } else {
-            if (statusText) statusText.textContent = "Update error: " + (nativeErr.message || nativeErr);
+            var nMsg = nativeErr.message || String(nativeErr);
+            if (nMsg.indexOf("404") !== -1) {
+              if (statusText) statusText.textContent = "Update package not found (HTTP 404). Check GitHub releases.";
+               if (ghBtn) ghBtn.style.display = "none";
+            } else {
+              if (statusText) statusText.textContent = "Update error: " + nMsg;
+            }
             if (btnConfirm) {
               btnConfirm.disabled = false;
               btnConfirm.innerHTML = '<i class="fas fa-rotate-right"></i> Retry Update';
@@ -8060,6 +8797,9 @@ function getRemoteSession() {
       var btnCancel = document.getElementById("btn-cancel-app-update");
       if (btnCancel) {
         btnCancel.addEventListener("click", function () {
+          if (state.updateInfo && state.updateInfo.version) {
+            localStorage.setItem("cc_dismissed_update_ver", String(state.updateInfo.version));
+          }
           closeModal("app-update-modal-overlay");
         });
       }
@@ -8067,6 +8807,9 @@ function getRemoteSession() {
       var closeBtn = document.getElementById("close-update-modal-btn");
       if (closeBtn) {
         closeBtn.addEventListener("click", function () {
+          if (state.updateInfo && state.updateInfo.version) {
+            localStorage.setItem("cc_dismissed_update_ver", String(state.updateInfo.version));
+          }
           closeModal("app-update-modal-overlay");
         });
       }
@@ -8089,6 +8832,7 @@ function getRemoteSession() {
       getState: function () { return state; }
     };
   })();
+  window.AppUpdateManager = AppUpdateManager;
 
   function init() {
     if (hasInitialized) {
@@ -8108,21 +8852,38 @@ function getRemoteSession() {
       showLoginFallback("splash setup exception");
     }
 
+    // If running in Capacitor native app, dismiss the native splash screen immediately
+    // so the animated HTML splash screen with logo and text is visible to the user
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SplashScreen) {
+      try {
+        window.Capacitor.Plugins.SplashScreen.hide();
+      } catch (splashErr) {
+        console.warn("[ClassConnect] Capacitor SplashScreen.hide error:", splashErr);
+      }
+    }
+
+    var splashDuration = 3500; // Display for at least 3.5 seconds so users can comfortably view and read all content
     setTimeout(function () {
-      console.log("[ClassConnect] Splash screen finished after 1.8 seconds.");
+      console.log("[ClassConnect] Splash screen finished after " + (splashDuration / 1000) + " seconds.");
       var splash = document.getElementById("splash-page");
       if (splash) {
-        splash.style.transition = "opacity 0.3s ease";
+        splash.style.transition = "opacity 0.45s ease";
         splash.style.opacity = "0";
         setTimeout(function () {
           if (splash.parentNode) splash.style.display = "none";
+          document.body.style.overflow = "";
+          document.body.style.position = "";
+          document.body.style.width = "";
           routeAfterSplash();
-        }, 300);
+        }, 450);
       } else {
         console.warn("[ClassConnect] Splash page not found; routing directly.");
+        document.body.style.overflow = "";
+        document.body.style.position = "";
+        document.body.style.width = "";
         routeAfterSplash();
       }
-    }, 1800);
+    }, splashDuration);
 
     try {
       if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {
@@ -8142,10 +8903,7 @@ function getRemoteSession() {
           window.Capacitor.Plugins.App.getLaunchUrl().then(function (result) {
             if (result && result.url) {
               console.log("[ClassConnect] App launched via deep link URL:", result.url);
-              var token = extractResetTokenFromUrl(result.url);
-              if (token) {
-                showResetPasswordPage(token);
-              }
+              handlePasswordRecoveryUrl(result.url);
             }
           }).catch(function (launchErr) {
             console.warn("[ClassConnect] getLaunchUrl error:", launchErr);
@@ -8155,10 +8913,7 @@ function getRemoteSession() {
           window.Capacitor.Plugins.App.addListener("appUrlOpen", function (data) {
             console.log("[ClassConnect] App opened with deep link URL:", data ? data.url : null);
             if (data && data.url) {
-              var token = extractResetTokenFromUrl(data.url);
-              if (token) {
-                showResetPasswordPage(token);
-              }
+              handlePasswordRecoveryUrl(data.url);
             }
           });
         } catch (appPluginErr) {

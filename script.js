@@ -8852,21 +8852,38 @@ function getRemoteSession() {
       showLoginFallback("splash setup exception");
     }
 
+    // If running in Capacitor native app, dismiss the native splash screen immediately
+    // so the animated HTML splash screen with logo and text is visible to the user
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SplashScreen) {
+      try {
+        window.Capacitor.Plugins.SplashScreen.hide();
+      } catch (splashErr) {
+        console.warn("[ClassConnect] Capacitor SplashScreen.hide error:", splashErr);
+      }
+    }
+
+    var splashDuration = 3500; // Display for at least 3.5 seconds so users can comfortably view and read all content
     setTimeout(function () {
-      console.log("[ClassConnect] Splash screen finished after 3.0 seconds.");
+      console.log("[ClassConnect] Splash screen finished after " + (splashDuration / 1000) + " seconds.");
       var splash = document.getElementById("splash-page");
       if (splash) {
-        splash.style.transition = "opacity 0.3s ease";
+        splash.style.transition = "opacity 0.45s ease";
         splash.style.opacity = "0";
         setTimeout(function () {
           if (splash.parentNode) splash.style.display = "none";
+          document.body.style.overflow = "";
+          document.body.style.position = "";
+          document.body.style.width = "";
           routeAfterSplash();
-        }, 300);
+        }, 450);
       } else {
         console.warn("[ClassConnect] Splash page not found; routing directly.");
+        document.body.style.overflow = "";
+        document.body.style.position = "";
+        document.body.style.width = "";
         routeAfterSplash();
       }
-    }, 3000);
+    }, splashDuration);
 
     try {
       if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {

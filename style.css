@@ -197,7 +197,7 @@ body.body-scroll-lock {
   text-align:      center;
   position:        fixed;
   inset:           0;
-  z-index:         999;
+  z-index:         999999;
   overflow:        hidden;
   padding:         0 24px;
 }
@@ -305,10 +305,11 @@ body.body-scroll-lock {
 .splash-footer {
   position:       absolute;
   bottom:         32px;
-  font-size:      11px;
+  font-size:      12px;
   font-weight:    600;
-  opacity:        0.6;
-  letter-spacing: 0.8px;
+  opacity:        0.85;
+  color:          rgba(255, 255, 255, 0.85);
+  letter-spacing: 1px;
   text-transform: uppercase;
 }
 
