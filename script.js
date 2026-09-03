@@ -8596,7 +8596,7 @@ function getRemoteSession() {
       if (permBox) permBox.style.display = "none";
       if (ghBtn) {
         ghBtn.style.display = "none";
-        ghBtn.href = info.releasePageUrl || info.fallbackUrl || "https://github.com/hdalmino0011/Class-Connect-Native/releases";
+        ghBtn.href = "#";
       }
 
       if (btnConfirm) {
@@ -8682,7 +8682,7 @@ function getRemoteSession() {
               var errMessage = evt.error || "Network error";
               if (errMessage.indexOf("404") !== -1 || errMessage.indexOf("not found") !== -1) {
                 statusText.textContent = "Update package not found on server (HTTP 404). You may already have the latest release.";
-                if (ghBtn) ghBtn.style.display = "inline-flex";
+                 if (ghBtn) ghBtn.style.display = "none";
               } else {
                 statusText.textContent = "Update failed: " + errMessage;
               }
@@ -8706,7 +8706,7 @@ function getRemoteSession() {
             var nMsg = nativeErr.message || String(nativeErr);
             if (nMsg.indexOf("404") !== -1) {
               if (statusText) statusText.textContent = "Update package not found (HTTP 404). Check GitHub releases.";
-              if (ghBtn) ghBtn.style.display = "inline-flex";
+               if (ghBtn) ghBtn.style.display = "none";
             } else {
               if (statusText) statusText.textContent = "Update error: " + nMsg;
             }
