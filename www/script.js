@@ -18,6 +18,11 @@ const _CFG_VAULT = {
 let SUPABASE_URL = _CFG_VAULT._decode(_CFG_VAULT._u);
 let SUPABASE_ANON_KEY = _CFG_VAULT._decode(_CFG_VAULT._k);
 
+if (typeof window !== "undefined" && window.__CONFIG__) {
+  if (window.__CONFIG__.supabaseUrl) SUPABASE_URL = window.__CONFIG__.supabaseUrl;
+  if (window.__CONFIG__.supabaseAnonKey) SUPABASE_ANON_KEY = window.__CONFIG__.supabaseAnonKey;
+}
+
 // Runtime config loader for server environment
 async function loadServerConfig() {
   try {
@@ -7598,6 +7603,493 @@ function getRemoteSession() {
     });
   }
 
+  // ==========================================
+  // IN-APP UPDATE & CACHE PURGE MANAGER
+  // ==========================================
+  var AppUpdateManager = (function () {
+    var CURRENT_VERSION = "1.0.0";
+    var CURRENT_BUILD = 1;
+    var GITHUB_RAW_URL = "https://raw.githubusercontent.com/hdalmino0011/Class-Connect-Native/main/version.json";
+    var SERVER_API_URL = "/api/app-version";
+    var LOCAL_STATIC_URL = "version.json";
+
+    var state = {
+      isNative: false,
+      currentVersion: CURRENT_VERSION,
+      currentBuild: CURRENT_BUILD,
+      updateAvailable: false,
+      updateInfo: null,
+      isDownloading: false,
+      hasCheckedThisSession: false
+    };
+
+    function compareVersions(v1, v2) {
+      if (!v1 || !v2) return 0;
+      var p1 = v1.replace(/^v/i, "").split(".").map(function(n) { return parseInt(n, 10) || 0; });
+      var p2 = v2.replace(/^v/i, "").split(".").map(function(n) { return parseInt(n, 10) || 0; });
+      for (var i = 0; i < Math.max(p1.length, p2.length); i++) {
+        var num1 = p1[i] || 0;
+        var num2 = p2[i] || 0;
+        if (num1 > num2) return 1;
+        if (num1 < num2) return -1;
+      }
+      return 0;
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes <= 0) return "0 B";
+      var sizes = ["B", "KB", "MB", "GB"];
+      var i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(1) + " " + sizes[i];
+    }
+
+    function showUpdateToast(msg, duration) {
+      duration = duration || 4000;
+      var toast = document.getElementById("app-update-toast");
+      var text = document.getElementById("app-update-toast-text");
+      if (!toast || !text) return;
+      text.textContent = msg;
+      toast.classList.add("show");
+      setTimeout(function () {
+        toast.classList.remove("show");
+      }, duration);
+    }
+
+    async function init() {
+      // 1. Detect if running natively under Capacitor
+      if (typeof window !== "undefined" && window.Capacitor && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform()) {
+        state.isNative = true;
+      }
+
+      // 2. Query native App info if available
+      try {
+        if (state.isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.AppUpdate) {
+          var nativeInfo = await window.Capacitor.Plugins.AppUpdate.getAppVersion();
+          if (nativeInfo && nativeInfo.versionName) {
+            state.currentVersion = nativeInfo.versionName;
+            state.currentBuild = nativeInfo.versionCode || 1;
+          }
+        } else if (typeof window !== "undefined" && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+          var appInfo = await window.Capacitor.Plugins.App.getInfo();
+          if (appInfo && appInfo.version) {
+            state.currentVersion = appInfo.version;
+            state.currentBuild = parseInt(appInfo.build, 10) || 1;
+          }
+        }
+      } catch (err) {
+        console.warn("[AppUpdate] Version detection warning:", err);
+      }
+
+      // 3. Update DOM version badges
+      updateVersionBadges(state.currentVersion);
+
+      // 4. Check if app was just updated to clear cache and inform user
+      checkPostUpdateState();
+
+      // 5. Setup UI event listeners
+      setupUI();
+
+      // 6. Schedule automatic background update check after 3.5 seconds
+      setTimeout(function () {
+        checkForUpdate({ silent: true });
+      }, 3500);
+    }
+
+    function updateVersionBadges(ver) {
+      var displayVer = ver.startsWith("v") ? ver : "v" + ver;
+      var settingsBadge = document.getElementById("settings-app-version-badge");
+      if (settingsBadge) settingsBadge.textContent = displayVer;
+
+      var aboutBadge = document.getElementById("about-app-version-badge");
+      if (aboutBadge) aboutBadge.textContent = displayVer;
+
+      var modalCurrent = document.getElementById("update-current-version");
+      if (modalCurrent) modalCurrent.textContent = displayVer;
+    }
+
+    async function checkPostUpdateState() {
+      // Check native plugin update flag
+      if (state.isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.AppUpdate) {
+        try {
+          var res = await window.Capacitor.Plugins.AppUpdate.wasJustUpdated();
+          if (res && res.justUpdated) {
+            console.log("[AppUpdate] Native app package was just updated! Cache was purged.");
+            showUpdateToast("ClassConnect updated successfully! Cache cleared.");
+            return;
+          }
+        } catch (e) {
+          console.warn("[AppUpdate] wasJustUpdated check warning:", e);
+        }
+      }
+
+      // Check Web / PWA post-update flag in localStorage
+      try {
+        var webJustUpdated = localStorage.getItem("cc_just_updated");
+        if (webJustUpdated) {
+          localStorage.removeItem("cc_just_updated");
+          showUpdateToast("ClassConnect updated to latest version! Cache cleared.");
+        }
+      } catch (e) {}
+    }
+
+    async function fetchRemoteVersionInfo() {
+      var urls = [
+        GITHUB_RAW_URL + "?t=" + Date.now(),
+        SERVER_API_URL + "?t=" + Date.now(),
+        LOCAL_STATIC_URL + "?t=" + Date.now()
+      ];
+
+      for (var i = 0; i < urls.length; i++) {
+        try {
+          var controller = new AbortController();
+          var timeoutId = setTimeout(function () { controller.abort(); }, 6000);
+          var res = await fetch(urls[i], {
+            cache: "no-store",
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            var data = await res.json();
+            if (data && data.version) {
+              return data;
+            }
+          }
+        } catch (err) {
+          // Try next url
+        }
+      }
+      return null;
+    }
+
+    async function checkForUpdate(options) {
+      var silent = options && options.silent;
+      var descElem = document.getElementById("settings-update-status-desc");
+      var btnSettings = document.getElementById("btn-check-updates-settings");
+      var btnAbout = document.getElementById("btn-check-updates-about");
+
+      if (!silent) {
+        if (descElem) descElem.textContent = "Checking for updates...";
+        if (btnSettings) {
+          btnSettings.disabled = true;
+          btnSettings.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+        }
+        if (btnAbout) {
+          btnAbout.disabled = true;
+          btnAbout.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+        }
+      }
+
+      try {
+        var remote = await fetchRemoteVersionInfo();
+        state.hasCheckedThisSession = true;
+
+        if (!remote || !remote.version) {
+          if (!silent) {
+            showUpdateToast("Unable to reach update server. Please check your internet connection.");
+            if (descElem) descElem.textContent = "Could not reach update server";
+          }
+          return { available: false, error: "Network error" };
+        }
+
+        var isNewer = false;
+        if (typeof remote.versionCode === "number" && typeof state.currentBuild === "number" && remote.versionCode > state.currentBuild) {
+          isNewer = true;
+        } else if (compareVersions(remote.version, state.currentVersion) > 0) {
+          isNewer = true;
+        }
+
+        if (isNewer) {
+          state.updateAvailable = true;
+          state.updateInfo = remote;
+          if (descElem) descElem.textContent = "Update v" + remote.version + " available!";
+          showUpdateModal(remote);
+          return { available: true, updateInfo: remote };
+        } else {
+          state.updateAvailable = false;
+          state.updateInfo = null;
+          var now = new Date();
+          var timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          if (descElem) descElem.textContent = "Up to date • Checked at " + timeStr;
+          if (!silent) {
+            showUpdateToast("You're using the latest version of ClassConnect (v" + state.currentVersion + ")");
+          }
+          return { available: false, currentVersion: state.currentVersion };
+        }
+      } catch (err) {
+        console.error("[AppUpdate] checkForUpdate error:", err);
+        if (!silent) {
+          showUpdateToast("Error checking for updates.");
+          if (descElem) descElem.textContent = "Error checking for updates";
+        }
+        return { available: false, error: err.message };
+      } finally {
+        if (!silent) {
+          if (btnSettings) {
+            btnSettings.disabled = false;
+            btnSettings.innerHTML = '<i class="fas fa-cloud-arrow-down"></i> Check Now';
+          }
+          if (btnAbout) {
+            btnAbout.disabled = false;
+            btnAbout.innerHTML = '<i class="fas fa-arrows-rotate"></i> Check for Updates';
+          }
+        }
+      }
+    }
+
+    function showUpdateModal(info) {
+      var modalOverlay = document.getElementById("app-update-modal-overlay");
+      if (!modalOverlay) return;
+
+      var currentElem = document.getElementById("update-current-version");
+      var targetElem = document.getElementById("update-target-version");
+      var subtitleElem = document.getElementById("update-modal-subtitle");
+      var notesList = document.getElementById("update-release-notes-list");
+      var progressContainer = document.getElementById("update-progress-container");
+      var progressBar = document.getElementById("update-progress-bar");
+      var progressText = document.getElementById("update-progress-percent-text");
+      var statusText = document.getElementById("update-progress-status-text");
+      var btnConfirm = document.getElementById("btn-confirm-app-update");
+      var btnCancel = document.getElementById("btn-cancel-app-update");
+      var closeBtn = document.getElementById("close-update-modal-btn");
+      var permBox = document.getElementById("update-perm-box");
+
+      if (currentElem) currentElem.textContent = "v" + state.currentVersion;
+      if (targetElem) targetElem.textContent = "v" + (info.version || "1.0.1");
+      if (subtitleElem && info.title) subtitleElem.textContent = info.title;
+
+      if (notesList) {
+        notesList.innerHTML = "";
+        var notes = info.releaseNotes || [
+          "Performance improvements & faster loading",
+          "Automatic in-app updater and cache clearing",
+          "Bug fixes and security updates"
+        ];
+        notes.forEach(function (note) {
+          var li = document.createElement("li");
+          li.innerHTML = '<i class="fas fa-check-circle"></i> <span>' + note + '</span>';
+          notesList.appendChild(li);
+        });
+      }
+
+      if (progressContainer) progressContainer.style.display = "none";
+      if (progressBar) progressBar.style.width = "0%";
+      if (progressText) progressText.textContent = "0%";
+      if (statusText) statusText.textContent = "Preparing update package...";
+      if (permBox) permBox.style.display = "none";
+
+      if (btnConfirm) {
+        btnConfirm.disabled = false;
+        btnConfirm.innerHTML = '<i class="fas fa-cloud-arrow-down"></i> Update Now';
+      }
+
+      if (info.forceUpdate) {
+        if (btnCancel) btnCancel.style.display = "none";
+        if (closeBtn) closeBtn.style.display = "none";
+      } else {
+        if (btnCancel) btnCancel.style.display = "";
+        if (closeBtn) closeBtn.style.display = "";
+      }
+
+      openModal("app-update-modal-overlay");
+    }
+
+    async function startUpdate() {
+      if (state.isDownloading) return;
+      state.isDownloading = true;
+
+      var info = state.updateInfo || {
+        version: "1.0.1",
+        apkUrl: "https://github.com/hdalmino0011/Class-Connect-Native/releases/download/v1.0.1/app-debug.apk"
+      };
+
+      var btnConfirm = document.getElementById("btn-confirm-app-update");
+      var btnCancel = document.getElementById("btn-cancel-app-update");
+      var closeBtn = document.getElementById("close-update-modal-btn");
+      var progressContainer = document.getElementById("update-progress-container");
+      var progressBar = document.getElementById("update-progress-bar");
+      var progressText = document.getElementById("update-progress-percent-text");
+      var statusText = document.getElementById("update-progress-status-text");
+      var sublabel = document.getElementById("update-progress-sublabel");
+      var permBox = document.getElementById("update-perm-box");
+
+      if (btnConfirm) {
+        btnConfirm.disabled = true;
+        btnConfirm.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Updating...';
+      }
+      if (btnCancel) btnCancel.style.display = "none";
+      if (closeBtn) closeBtn.style.display = "none";
+      if (progressContainer) progressContainer.style.display = "flex";
+
+      // NATIVE ANDROID UPDATE PATH
+      if (state.isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.AppUpdate) {
+        try {
+          var plugin = window.Capacitor.Plugins.AppUpdate;
+
+          // Check if unknown sources install permission is allowed
+          var permCheck = await plugin.canRequestPackageInstalls();
+          if (permCheck && !permCheck.canInstall) {
+            if (permBox) permBox.style.display = "flex";
+            if (statusText) statusText.textContent = "Install permission required";
+            if (sublabel) sublabel.textContent = "Please grant permission to install updates, then return here.";
+          }
+
+          // Register progress listener
+          await plugin.addListener("downloadProgress", function (evt) {
+            if (evt.status === "permission_required") {
+              if (permBox) permBox.style.display = "flex";
+              if (statusText) statusText.textContent = "Install permission required";
+              return;
+            }
+
+            if (evt.status === "downloading") {
+              var pct = evt.percent || 0;
+              if (progressBar) progressBar.style.width = pct + "%";
+              if (progressText) progressText.textContent = pct + "%";
+              var byteDetails = "";
+              if (evt.bytesRead && evt.totalBytes) {
+                byteDetails = " (" + formatBytes(evt.bytesRead) + " / " + formatBytes(evt.totalBytes) + ")";
+              }
+              if (statusText) statusText.textContent = "Downloading update package" + byteDetails + "...";
+            } else if (evt.status === "installing") {
+              if (progressBar) progressBar.style.width = "100%";
+              if (progressText) progressText.textContent = "100%";
+              if (statusText) statusText.textContent = "Launching package installer...";
+              if (sublabel) sublabel.textContent = "Tap 'Install' when prompted. Cache will automatically clear upon restart.";
+            } else if (evt.status === "error") {
+              if (statusText) statusText.textContent = "Update failed: " + (evt.error || "Network error");
+              if (btnConfirm) {
+                btnConfirm.disabled = false;
+                btnConfirm.innerHTML = '<i class="fas fa-rotate-right"></i> Retry Update';
+              }
+              if (btnCancel) btnCancel.style.display = "";
+            }
+          });
+
+          // Trigger download and installation
+          var apkUrl = info.apkUrl || "https://github.com/hdalmino0011/Class-Connect-Native/releases/download/v" + (info.version || "1.0.1") + "/app-debug.apk";
+          await plugin.downloadAndInstall({ url: apkUrl });
+
+        } catch (nativeErr) {
+          console.error("[AppUpdate] Native update error:", nativeErr);
+          if (nativeErr === "PERMISSION_REQUIRED" || (nativeErr && nativeErr.message === "PERMISSION_REQUIRED")) {
+            if (permBox) permBox.style.display = "flex";
+          } else {
+            if (statusText) statusText.textContent = "Update error: " + (nativeErr.message || nativeErr);
+            if (btnConfirm) {
+              btnConfirm.disabled = false;
+              btnConfirm.innerHTML = '<i class="fas fa-rotate-right"></i> Retry Update';
+            }
+            if (btnCancel) btnCancel.style.display = "";
+          }
+          state.isDownloading = false;
+        }
+        return;
+      }
+
+      // WEB / PWA / BROWSER UPDATE PATH
+      try {
+        if (statusText) statusText.textContent = "Downloading latest web application assets...";
+        var pct = 0;
+        var interval = setInterval(async function () {
+          pct += 15;
+          if (pct > 100) pct = 100;
+          if (progressBar) progressBar.style.width = pct + "%";
+          if (progressText) progressText.textContent = pct + "%";
+
+          if (pct === 100) {
+            clearInterval(interval);
+            if (statusText) statusText.textContent = "Purging cache and preparing clean restart...";
+            if (sublabel) sublabel.textContent = "Clearing storage cache and reloading...";
+
+            // Clear ServiceWorker and CacheStorage
+            try {
+              if ("caches" in window) {
+                var keys = await caches.keys();
+                await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+              }
+              if ("serviceWorker" in navigator) {
+                var registrations = await navigator.serviceWorker.getRegistrations();
+                for (var r of registrations) {
+                  await r.update();
+                }
+              }
+            } catch (cacheErr) {
+              console.warn("[AppUpdate] Cache purge warning:", cacheErr);
+            }
+
+            // Set update flag for post-refresh toast
+            localStorage.setItem("cc_just_updated", "true");
+
+            setTimeout(function () {
+              window.location.reload(true);
+            }, 1200);
+          }
+        }, 200);
+      } catch (webErr) {
+        console.error("[AppUpdate] Web update error:", webErr);
+        if (statusText) statusText.textContent = "Error updating: " + webErr.message;
+        state.isDownloading = false;
+      }
+    }
+
+    function setupUI() {
+      // Check updates from Settings
+      var btnSettings = document.getElementById("btn-check-updates-settings");
+      if (btnSettings) {
+        btnSettings.addEventListener("click", function () {
+          checkForUpdate({ silent: false });
+        });
+      }
+
+      // Check updates from About view
+      var btnAbout = document.getElementById("btn-check-updates-about");
+      if (btnAbout) {
+        btnAbout.addEventListener("click", function () {
+          checkForUpdate({ silent: false });
+        });
+      }
+
+      // Update modal action buttons
+      var btnConfirm = document.getElementById("btn-confirm-app-update");
+      if (btnConfirm) {
+        btnConfirm.addEventListener("click", function () {
+          startUpdate();
+        });
+      }
+
+      var btnCancel = document.getElementById("btn-cancel-app-update");
+      if (btnCancel) {
+        btnCancel.addEventListener("click", function () {
+          closeModal("app-update-modal-overlay");
+        });
+      }
+
+      var closeBtn = document.getElementById("close-update-modal-btn");
+      if (closeBtn) {
+        closeBtn.addEventListener("click", function () {
+          closeModal("app-update-modal-overlay");
+        });
+      }
+
+      var btnGrantPerm = document.getElementById("btn-grant-install-perm");
+      if (btnGrantPerm) {
+        btnGrantPerm.addEventListener("click", function () {
+          if (state.isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.AppUpdate) {
+            window.Capacitor.Plugins.AppUpdate.openInstallPermissionSettings();
+          }
+        });
+      }
+    }
+
+    return {
+      init: init,
+      checkForUpdate: checkForUpdate,
+      showUpdateModal: showUpdateModal,
+      startUpdate: startUpdate,
+      getState: function () { return state; }
+    };
+  })();
+
   function init() {
     if (hasInitialized) {
       console.warn("[ClassConnect] Duplicate init call ignored.");
@@ -7686,6 +8178,7 @@ function getRemoteSession() {
       setupEditPostToolbar();
       registerServiceWorker();
       DeviceNotificationManager.init();
+      AppUpdateManager.init();
       handleOffline(!navigator.onLine);
       console.log("[ClassConnect] Optional app setup completed.");
     } catch (error) {
@@ -7696,6 +8189,7 @@ function getRemoteSession() {
   window.navigateTo = navigateTo;
   window.toggleSettingsGroup = toggleSettingsGroup;
   window.DeviceNotificationManager = DeviceNotificationManager;
+  window.AppUpdateManager = AppUpdateManager;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init, { once: true });

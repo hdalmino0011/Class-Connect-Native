@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>ClassConnect</title>
   <meta name="description" content="Connect with your classmates — manage college subjects, assignments, grades, and curriculum.">
+  <meta property="og:title" content="ClassConnect">
+  <meta property="og:description" content="Connect with your classmates — manage college subjects, assignments, grades, and curriculum.">
   <meta name="theme-color" content="#0F172A">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -828,8 +830,13 @@
           </div>
           <div class="about-info-item">
             <span class="about-label">Version</span>
-            <span class="about-value">v1.0.0</span>
+            <span class="about-value" id="about-app-version-badge">v1.0.0</span>
           </div>
+        </div>
+        <div style="margin-top: 14px; display: flex; justify-content: center;">
+          <button type="button" id="btn-check-updates-about" class="btn-secondary btn-sm" style="display: flex; align-items: center; gap: 8px;">
+            <i class="fas fa-arrows-rotate"></i> Check for Updates
+          </button>
         </div>
         <div class="about-divider"></div>
         <p class="about-footer">
@@ -1123,7 +1130,21 @@
               <span class="settings-desc">Current version of ClassConnect</span>
             </div>
           </div>
-          <span class="settings-version">v1.0.0</span>
+          <span class="settings-version" id="settings-app-version-badge">v1.0.0</span>
+        </div>
+
+        <!-- Check for Updates -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-arrows-rotate"></i>
+            <div>
+              <span class="settings-label">Check for Updates</span>
+              <span class="settings-desc" id="settings-update-status-desc">Check if a new version is available</span>
+            </div>
+          </div>
+          <button type="button" id="btn-check-updates-settings" class="btn-secondary" style="white-space: nowrap; display: flex; align-items: center; gap: 6px;">
+            <i class="fas fa-cloud-arrow-down"></i> Check Now
+          </button>
         </div>
 
         <!-- Storage Used -->
@@ -1890,6 +1911,98 @@
   </div>
 </div>
 
+<!-- ==================== APP UPDATE MODAL ==================== -->
+<div id="app-update-modal-overlay" class="modal-overlay" aria-hidden="true">
+  <div class="modal-card app-update-modal-card" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
+    <div class="modal-header">
+      <div class="app-update-header-title">
+        <div class="app-update-badge-icon">
+          <i class="fas fa-rocket"></i>
+        </div>
+        <div>
+          <h3 id="update-modal-title">Update Available</h3>
+          <p class="app-update-subtitle" id="update-modal-subtitle">A newer version of ClassConnect is ready</p>
+        </div>
+      </div>
+      <button id="close-update-modal-btn" class="modal-close" aria-label="Close">
+        <i class="fas fa-xmark"></i>
+      </button>
+    </div>
+
+    <div class="app-update-body">
+      <!-- Version pills -->
+      <div class="update-version-row">
+        <div class="update-version-chip current">
+          <span class="chip-label">Installed</span>
+          <span class="chip-val" id="update-current-version">v1.0.0</span>
+        </div>
+        <i class="fas fa-arrow-right-long update-arrow-icon"></i>
+        <div class="update-version-chip target">
+          <span class="chip-label">Latest Version</span>
+          <span class="chip-val" id="update-target-version">v1.0.1</span>
+        </div>
+      </div>
+
+      <!-- Release highlights / notes -->
+      <div class="update-notes-card">
+        <div class="update-notes-header">
+          <i class="fas fa-sparkles"></i>
+          <span>What's New in this Version:</span>
+        </div>
+        <ul id="update-release-notes-list" class="update-notes-list">
+          <li><i class="fas fa-check-circle"></i> Automatic in-app update detector & background downloader</li>
+          <li><i class="fas fa-check-circle"></i> Self-clearing cache engine & instant app refresh</li>
+          <li><i class="fas fa-check-circle"></i> Performance improvements and bug fixes</li>
+        </ul>
+      </div>
+
+      <!-- Cache & restart advisory badge -->
+      <div class="update-cache-notice">
+        <i class="fas fa-broom"></i>
+        <span>After installing, the app will automatically clear old cache and restart cleanly so you get the latest features immediately.</span>
+      </div>
+
+      <!-- Download progress container (shown during download) -->
+      <div id="update-progress-container" class="update-progress-container" style="display: none;">
+        <div class="update-progress-meta">
+          <span id="update-progress-status-text" class="update-progress-status-text">Starting update download...</span>
+          <span id="update-progress-percent-text" class="update-progress-percent-text">0%</span>
+        </div>
+        <div class="update-progress-track">
+          <div id="update-progress-bar" class="update-progress-bar" style="width: 0%;"></div>
+        </div>
+        <p id="update-progress-sublabel" class="update-progress-sublabel">Please keep the app open while downloading...</p>
+      </div>
+
+      <!-- Permission prompt box if needed on Android -->
+      <div id="update-perm-box" class="update-perm-box" style="display: none;">
+        <i class="fas fa-shield-halved"></i>
+        <div style="flex: 1;">
+          <p class="update-perm-title">Install Permission Needed</p>
+          <p class="update-perm-desc">Please allow ClassConnect to install updates on this device.</p>
+        </div>
+        <button type="button" id="btn-grant-install-perm" class="btn-secondary btn-sm">Allow</button>
+      </div>
+    </div>
+
+    <!-- Modal Footer Actions -->
+    <div class="app-update-footer">
+      <button type="button" id="btn-cancel-app-update" class="btn-secondary">
+        Later
+      </button>
+      <button type="button" id="btn-confirm-app-update" class="btn-primary">
+        <i class="fas fa-cloud-arrow-down"></i> Update Now
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- App Update Toast Notification -->
+<div id="app-update-toast" class="update-toast" aria-live="polite">
+  <i class="fas fa-circle-check" style="color: var(--mint-green);"></i>
+  <span id="app-update-toast-text">App updated successfully!</span>
+</div>
+
 <!-- ==================== INACTIVITY LOGOUT MODAL ==================== -->
 <div id="inactivity-modal-overlay" class="cc-inactivity-overlay" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="inactivity-modal-title">
   <div class="cc-inactivity-box">
@@ -1918,6 +2031,7 @@
 </div>
 
 <!-- Script -->
+<script src="/api/config.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
