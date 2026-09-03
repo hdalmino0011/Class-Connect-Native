@@ -23,6 +23,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Custom URL Scheme Deep Links (e.g. classconnect://reset-password?reset_token=... and io.github.hdalmino0011.classconnect://...) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="classconnect" />
+                <data android:scheme="io.github.hdalmino0011.classconnect" />
+            </intent-filter>
+
+            <!-- Android App Links (Domain Matching for Reset Password Link from Email) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="hdalmino0011.github.io" />
+                <data android:scheme="http" android:host="hdalmino0011.github.io" />
+            </intent-filter>
+
         </activity>
 
         <provider

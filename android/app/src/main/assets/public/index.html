@@ -222,6 +222,99 @@
   </div>
 </section>
 
+<!-- ==================== SECRET PAGE: RESET PASSWORD ==================== -->
+<!-- Accessible ONLY via valid reset password link/token before expiry -->
+<section id="reset-page" class="page" aria-label="Set New Password" style="display:none;">
+  <div class="auth-wrapper">
+    <div class="auth-card">
+
+      <div class="auth-logo" aria-hidden="true">
+        <img src="logo.png" alt="ClassConnect Logo" class="app-logo-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='inline-block';">
+        <i class="fas fa-graduation-cap" style="display: none;"></i>
+      </div>
+
+      <!-- Quick Open in App banner (shown if opened in external web browser on mobile) -->
+      <div id="reset-open-in-app-banner" class="reset-open-in-app-banner" style="display:none;">
+        <i class="fas fa-mobile-screen-button"></i>
+        <div class="reset-open-in-app-info">
+          <strong>Open in ClassConnect App</strong>
+          <span>Continue inside your installed app</span>
+        </div>
+        <a id="btn-deep-link-to-app" href="#" class="btn-deep-link">Open App</a>
+      </div>
+
+      <!-- Active Reset Form -->
+      <form id="reset-page-form" class="auth-form active-form" novalidate autocomplete="off">
+        <h2 class="auth-title">Set New Password</h2>
+        <p class="auth-subtitle">Enter your new secure password below</p>
+
+        <div id="reset-page-error" class="form-error" hidden></div>
+        <div id="reset-page-success" class="form-success" hidden></div>
+
+        <input type="hidden" id="reset-page-token-field">
+
+        <div class="input-group">
+          <i class="fas fa-key input-icon" aria-hidden="true"></i>
+          <input
+            type="password"
+            id="reset-page-new-password"
+            placeholder="New Password (min 6 chars)"
+            required
+            minlength="6"
+            autocomplete="new-password"
+          >
+          <button type="button" class="toggle-password" data-target="reset-page-new-password" aria-label="Toggle password visibility">
+            <i class="fas fa-eye"></i>
+          </button>
+        </div>
+
+        <div class="input-group">
+          <i class="fas fa-lock input-icon" aria-hidden="true"></i>
+          <input
+            type="password"
+            id="reset-page-confirm-password"
+            placeholder="Confirm New Password"
+            required
+            minlength="6"
+            autocomplete="new-password"
+          >
+          <button type="button" class="toggle-password" data-target="reset-page-confirm-password" aria-label="Toggle password visibility">
+            <i class="fas fa-eye"></i>
+          </button>
+        </div>
+
+        <button type="submit" class="btn-primary" id="reset-page-submit-btn">
+          <i class="fas fa-check"></i>
+          <span class="btn-text">Update Password</span>
+        </button>
+
+        <p class="switch-form-text">
+          <a href="#" id="reset-page-back-to-login"><i class="fas fa-arrow-left"></i> Back to Login</a>
+        </p>
+      </form>
+
+      <!-- Expired / Invalid Token Fallback Card -->
+      <div id="reset-page-expired" class="reset-expired-state" style="display:none;">
+        <div class="reset-expired-badge">
+          <i class="fas fa-clock-rotate-left"></i>
+        </div>
+        <h2 class="auth-title">Link Expired or Invalid</h2>
+        <p class="auth-subtitle">This password reset link has expired or has already been used for your account's security.</p>
+        
+        <button type="button" class="btn-primary" id="reset-page-request-new-btn">
+          <i class="fas fa-rotate-right"></i>
+          <span class="btn-text">Request New Link</span>
+        </button>
+
+        <p class="switch-form-text">
+          <a href="#" id="reset-expired-back-to-login"><i class="fas fa-arrow-left"></i> Back to Login</a>
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
 <!-- ==================== PAGE 3: DASHBOARD ==================== -->
 <section id="dashboard-page" class="page" aria-label="Dashboard">
 

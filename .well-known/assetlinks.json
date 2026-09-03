@@ -3,6 +3,16 @@
     "relation": ["delegate_permission/common.handle_all_urls"],
     "target": {
       "namespace": "android_app",
+      "package_name": "io.github.hdalmino0011.classconnect",
+      "sha256_cert_fingerprints": [
+        "C3:11:59:BB:63:D2:7F:6B:77:E0:28:5D:A1:B4:E3:17:92:B4:00:D4:CC:40:38:50:24:80:61:38:85:73:1F:DC"
+      ]
+    }
+  },
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
       "package_name": "io.github.hdalmino0011.twa",
       "sha256_cert_fingerprints": [
         "C3:11:59:BB:63:D2:7F:6B:77:E0:28:5D:A1:B4:E3:17:92:B4:00:D4:CC:40:38:50:24:80:61:38:85:73:1F:DC"

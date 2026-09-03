@@ -5986,30 +5986,99 @@ function getRemoteSession() {
   }
 
   // ================================================================
-  // ===== NEW: Password Reset via Brevo + Custom Edge Functions =====
+  // ===== SECRET RESET PASSWORD PAGE & DEEP LINK HANDLING =====
   // ================================================================
 
+  function extractResetTokenFromUrl(urlStr) {
+    if (!urlStr) return null;
+    try {
+      var fakeUrl = urlStr.replace(/^([a-zA-Z0-9._-]+):\/\//, "https://dummy.host/");
+      var parsed = new URL(fakeUrl, window.location.origin);
+      var token = parsed.searchParams.get("reset_token") || parsed.searchParams.get("token");
+      if (!token && parsed.hash) {
+        var hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
+        token = hashParams.get("reset_token") || hashParams.get("token");
+      }
+      return token ? token.trim() : null;
+    } catch (e) {
+      var match = urlStr.match(/[?&#]reset_token=([^&#]+)/i) || urlStr.match(/[?&#]token=([^&#]+)/i);
+      return match ? decodeURIComponent(match[1]).trim() : null;
+    }
+  }
+
   function getResetToken() {
-    var params = new URLSearchParams(window.location.search);
-    return params.get('reset_token');
+    return extractResetTokenFromUrl(window.location.href);
+  }
+
+  function showResetPasswordPage(token) {
+    console.log("[ClassConnect] Routing to secret reset page. Has token:", !!token);
+
+    closeDrawer();
+    document.querySelectorAll(".modal-overlay.active-modal").forEach(function(m) {
+      m.classList.remove("active-modal");
+      m.setAttribute("aria-hidden", "true");
+    });
+
+    var banner = document.getElementById("offline-banner");
+    if (banner) banner.hidden = true;
+
+    showPage("reset-page");
+
+    var tokenField = document.getElementById("reset-page-token-field");
+    var resetForm = document.getElementById("reset-page-form");
+    var expiredState = document.getElementById("reset-page-expired");
+    var appBanner = document.getElementById("reset-open-in-app-banner");
+    var deepLinkBtn = document.getElementById("btn-deep-link-to-app");
+
+    hideError("reset-page-error");
+    hideError("reset-page-success");
+
+    if (token) {
+      if (tokenField) tokenField.value = token;
+      if (resetForm) resetForm.style.display = "flex";
+      if (expiredState) expiredState.style.display = "none";
+      var newPwd = document.getElementById("reset-page-new-password");
+      var confirmPwd = document.getElementById("reset-page-confirm-password");
+      if (newPwd) newPwd.value = "";
+      if (confirmPwd) confirmPwd.value = "";
+
+      // Also populate existing view/modal fields for backwards compatibility
+      var vf = document.getElementById("reset-token-field-view");
+      if (vf) vf.value = token;
+      var mf = document.getElementById("reset-token-field");
+      if (mf) mf.value = token;
+
+      // If running on a web browser on mobile (not in native Capacitor app), provide 1-tap app launch
+      var isNative = typeof window.Capacitor !== "undefined" && typeof window.Capacitor.isNativePlatform === "function" && window.Capacitor.isNativePlatform();
+      var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+      if (!isNative && isMobile && appBanner && deepLinkBtn) {
+        var customSchemeUrl = "classconnect://reset-password?reset_token=" + encodeURIComponent(token);
+        deepLinkBtn.href = customSchemeUrl;
+        appBanner.style.display = "flex";
+
+        // Attempt automatic deep link handoff to native app
+        setTimeout(function() {
+          try {
+            window.location.href = customSchemeUrl;
+          } catch(e) {}
+        }, 200);
+      } else if (appBanner) {
+        appBanner.style.display = "none";
+      }
+    } else {
+      if (tokenField) tokenField.value = "";
+      if (resetForm) resetForm.style.display = "none";
+      if (expiredState) expiredState.style.display = "flex";
+      if (appBanner) appBanner.style.display = "none";
+    }
   }
 
   function showResetPasswordView(token) {
-    document.getElementById('reset-token-field-view').value = token || '';
-    document.getElementById('reset-new-password-view').value = '';
-    document.getElementById('reset-confirm-password-view').value = '';
-    hideError('reset-error-view');
-    hideError('reset-success-view');
-    switchView('view-reset-password');
+    showResetPasswordPage(token);
   }
 
   function showResetPasswordModal(token) {
-    document.getElementById('reset-token-field').value = token || '';
-    document.getElementById('reset-new-password').value = '';
-    document.getElementById('reset-confirm-password').value = '';
-    hideError('reset-error');
-    hideError('reset-success');
-    openModal('reset-password-modal-overlay');
+    showResetPasswordPage(token);
   }
 
   // ===== INIT EVENT LISTENERS =====
@@ -6319,6 +6388,135 @@ function getRemoteSession() {
     if (forgotOverlay) {
       forgotOverlay.addEventListener("click", function (e) {
         if (e.target === forgotOverlay) closeModal("forgot-password-modal-overlay");
+      });
+    }
+
+    // ===== SECRET RESET PASSWORD PAGE HANDLERS =====
+    var resetPageForm = document.getElementById("reset-page-form");
+    if (resetPageForm) {
+      resetPageForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        hideError("reset-page-error");
+        hideError("reset-page-success");
+
+        var token = (document.getElementById("reset-page-token-field").value || "").trim();
+        var newPwd = document.getElementById("reset-page-new-password").value;
+        var confirmPwd = document.getElementById("reset-page-confirm-password").value;
+
+        if (!token) {
+          showError("reset-page-error", "Reset token is missing or has expired. Please request a new link.");
+          var exp = document.getElementById("reset-page-expired");
+          if (exp) {
+            resetPageForm.style.display = "none";
+            exp.style.display = "flex";
+          }
+          return;
+        }
+
+        if (newPwd.length < 6) {
+          showError("reset-page-error", "Password must be at least 6 characters.");
+          return;
+        }
+        if (newPwd !== confirmPwd) {
+          showError("reset-page-error", "Passwords do not match.");
+          return;
+        }
+
+        var btn = document.getElementById("reset-page-submit-btn");
+        setButtonLoading(btn, true);
+
+        withLoading(function () {
+          return fetch(SUPABASE_URL + "/functions/v1/update-password", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({ token: token, new_password: newPwd }),
+          });
+        })
+          .then(function (response) { return response.json(); })
+          .then(function (result) {
+            setButtonLoading(btn, false);
+            if (result.success) {
+              var succEl = document.getElementById("reset-page-success");
+              if (succEl) {
+                succEl.textContent = result.message || "Password updated successfully!";
+                succEl.hidden = false;
+              }
+              showToast("Password updated! Redirecting to login...", "success");
+
+              setTimeout(function () {
+                if (window.history && window.history.replaceState) {
+                  window.history.replaceState(null, null, window.location.pathname);
+                }
+                showPage("login-page");
+                showLoginForm();
+              }, 2000);
+            } else {
+              var msg = result.message || "Could not update password.";
+              if (/expired|invalid/i.test(msg)) {
+                var expBox = document.getElementById("reset-page-expired");
+                if (expBox) {
+                  resetPageForm.style.display = "none";
+                  expBox.style.display = "flex";
+                }
+              }
+              showError("reset-page-error", msg);
+            }
+          })
+          .catch(function (error) {
+            console.error("[ClassConnect] Reset password error:", error);
+            setButtonLoading(btn, false);
+            showError("reset-page-error", "Unable to update password. Please check your connection and try again.");
+          });
+      });
+    }
+
+    var resetPageBackToLogin = document.getElementById("reset-page-back-to-login");
+    if (resetPageBackToLogin) {
+      resetPageBackToLogin.addEventListener("click", function (e) {
+        e.preventDefault();
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, null, window.location.pathname);
+        }
+        showPage("login-page");
+        showLoginForm();
+      });
+    }
+
+    var resetPageReqNewBtn = document.getElementById("reset-page-request-new-btn");
+    if (resetPageReqNewBtn) {
+      resetPageReqNewBtn.addEventListener("click", function (e) {
+        e.preventDefault();
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, null, window.location.pathname);
+        }
+        showPage("login-page");
+        showLoginForm();
+        openModal("forgot-password-modal-overlay");
+      });
+    }
+
+    var resetExpiredBackToLogin = document.getElementById("reset-expired-back-to-login");
+    if (resetExpiredBackToLogin) {
+      resetExpiredBackToLogin.addEventListener("click", function (e) {
+        e.preventDefault();
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, null, window.location.pathname);
+        }
+        showPage("login-page");
+        showLoginForm();
+      });
+    }
+
+    var deepLinkBtn = document.getElementById("btn-deep-link-to-app");
+    if (deepLinkBtn) {
+      deepLinkBtn.addEventListener("click", function () {
+        var token = (document.getElementById("reset-page-token-field").value || "").trim();
+        if (token) {
+          deepLinkBtn.href = "classconnect://reset-password?reset_token=" + encodeURIComponent(token);
+        }
       });
     }
 
@@ -7366,18 +7564,11 @@ function getRemoteSession() {
 
     var resetToken = getResetToken();
     if (resetToken) {
-      console.log("[ClassConnect] Reset token detected. Showing reset view.");
-      showPage("dashboard-page");
-      var resetTopnav = document.querySelector(".dashboard-topnav");
-      var resetBottomNav = document.querySelector(".bottom-nav");
-      if (resetTopnav) resetTopnav.style.display = "none";
-      if (resetBottomNav) resetBottomNav.style.display = "none";
-      showResetPasswordView(resetToken);
+      console.log("[ClassConnect] Reset token detected. Showing secret reset password page directly.");
+      showResetPasswordPage(resetToken);
       if (window.history && window.history.replaceState) {
         window.history.replaceState(null, null, window.location.pathname);
       }
-      var banner = document.getElementById("offline-banner");
-      if (banner) banner.hidden = true;
       return;
     }
 
@@ -7449,6 +7640,37 @@ function getRemoteSession() {
           window.Capacitor.Plugins.StatusBar.setStyle({ style: "DARK" });
         } catch (sbErr) {
           console.warn("[ClassConnect] StatusBar config error:", sbErr);
+        }
+      }
+
+      // ===== CAPACITOR DEEP LINK HANDLER =====
+      if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
+        try {
+          // Check if app was cold-started from an email deep link
+          window.Capacitor.Plugins.App.getLaunchUrl().then(function (result) {
+            if (result && result.url) {
+              console.log("[ClassConnect] App launched via deep link URL:", result.url);
+              var token = extractResetTokenFromUrl(result.url);
+              if (token) {
+                showResetPasswordPage(token);
+              }
+            }
+          }).catch(function (launchErr) {
+            console.warn("[ClassConnect] getLaunchUrl error:", launchErr);
+          });
+
+          // Listen for deep link events while app is open or running in background
+          window.Capacitor.Plugins.App.addListener("appUrlOpen", function (data) {
+            console.log("[ClassConnect] App opened with deep link URL:", data ? data.url : null);
+            if (data && data.url) {
+              var token = extractResetTokenFromUrl(data.url);
+              if (token) {
+                showResetPasswordPage(token);
+              }
+            }
+          });
+        } catch (appPluginErr) {
+          console.warn("[ClassConnect] Capacitor App plugin setup error:", appPluginErr);
         }
       }
 
