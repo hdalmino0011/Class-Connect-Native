@@ -3116,7 +3116,9 @@ function getRemoteSession() {
         if (badgeText) badgeText.textContent = label;
 
         var settingsLabel = document.getElementById("settings-active-term-label");
-        if (settingsLabel) settingsLabel.textContent = label;
+        if (settingsLabel) {
+          settingsLabel.textContent = active.isConfigured ? label : "Set term above";
+        }
 
         var settingsYearSelect = document.getElementById("settings-active-year-select");
         if (settingsYearSelect && active.year) {
@@ -8851,7 +8853,7 @@ function getRemoteSession() {
     }
 
     setTimeout(function () {
-      console.log("[ClassConnect] Splash screen finished after 1.8 seconds.");
+      console.log("[ClassConnect] Splash screen finished after 3.0 seconds.");
       var splash = document.getElementById("splash-page");
       if (splash) {
         splash.style.transition = "opacity 0.3s ease";
@@ -8864,7 +8866,7 @@ function getRemoteSession() {
         console.warn("[ClassConnect] Splash page not found; routing directly.");
         routeAfterSplash();
       }
-    }, 1800);
+    }, 3000);
 
     try {
       if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.StatusBar) {

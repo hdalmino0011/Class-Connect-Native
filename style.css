@@ -3223,6 +3223,117 @@ body.body-scroll-lock {
   background:   var(--white);
 }
 
+.settings-item button {
+  width: auto;
+  max-width: fit-content;
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.settings-item .btn-primary,
+#settings-blast-schedule-btn {
+  width: auto;
+  max-width: fit-content;
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-height: 38px;
+  height: 38px;
+  padding: 0 16px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: linear-gradient(135deg, var(--primary-blue) 0%, var(--bright-blue) 100%);
+  color: #ffffff;
+  border: none;
+  box-shadow: 0 2px 8px -1px rgba(37, 99, 235, 0.35);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-sizing: border-box;
+}
+
+.settings-item .btn-primary:hover:not(:disabled),
+#settings-blast-schedule-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px -2px rgba(37, 99, 235, 0.45);
+}
+
+.settings-item .btn-primary:active,
+#settings-blast-schedule-btn:active {
+  transform: translateY(0);
+}
+
+.settings-term-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.settings-term-select {
+  padding: 8px 30px 8px 12px;
+  min-height: 38px;
+  height: 38px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  background-color: var(--gray-50);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--deep-navy);
+  font-family: var(--font-base);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  transition: all var(--transition-fast);
+  box-sizing: border-box;
+}
+
+.settings-term-select:focus {
+  outline: none;
+  border-color: var(--primary-blue);
+  background-color: var(--white);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+@media (max-width: 580px) {
+  .settings-term-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .settings-term-controls {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding-left: 34px;
+  }
+  .settings-term-select {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
 .settings-version {
   font-size:   13px;
   color:       var(--gray-500);
