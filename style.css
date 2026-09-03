@@ -6575,30 +6575,114 @@ body.cc-global-loading .bottom-nav {
 
 .notif-modal-footer {
   background: #F8FAFC;
-  padding: 12px 18px;
-  border-top: 1px solid #F1F5F9;
+  padding: 10px 14px;
+  border-top: 1px solid #E2E8F0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .btn-notif-footer-link {
   background: none;
   border: none;
   color: #64748B;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 0;
+  gap: 5px;
+  padding: 6px 4px;
+  white-space: nowrap;
+  flex: 0 0 auto;
   transition: color var(--transition-fast);
 }
 
 .btn-notif-footer-link:hover {
   color: #2563EB;
+}
+
+.btn-notif-blast-btn {
+  background: #2563EB;
+  color: #FFFFFF;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(37, 99, 235, 0.25);
+  transition: all var(--transition-fast);
+  flex: 0 0 auto;
+  margin: 0 auto;
+}
+
+.btn-notif-blast-btn:hover {
+  background: #1D4ED8;
+  transform: translateY(-1px);
+}
+
+.btn-notif-blast-btn:active {
+  transform: translateY(0);
+}
+
+.btn-notif-test-btn {
+  background: #FFFFFF;
+  color: #334155;
+  border: 1px solid #CBD5E1;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex: 0 0 auto;
+}
+
+.btn-notif-test-btn:hover {
+  background: #F1F5F9;
+  border-color: #94A3B8;
+  color: #0F172A;
+}
+
+@media (max-width: 480px) {
+  .notif-modal-footer {
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .btn-notif-footer-link {
+    font-size: 11px;
+    padding: 4px 2px;
+    gap: 4px;
+  }
+  .btn-notif-blast-btn {
+    font-size: 11px;
+    padding: 6px 9px;
+    gap: 4px;
+  }
+  .btn-notif-test-btn {
+    font-size: 11px;
+    padding: 5px 8px;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 380px) {
+  .btn-notif-footer-link .notif-footer-text {
+    display: none;
+  }
 }
 
 /* Switch & Slider Controls */

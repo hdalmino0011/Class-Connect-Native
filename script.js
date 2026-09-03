@@ -1213,11 +1213,15 @@ function getRemoteSession() {
 
       // ===== SYNC: Ensure subject exists in 'subjects' =====
       var scheduleStr = buildScheduleString(day, startTime, endTime);
+      var currentTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
+        ? window.DeviceNotificationManager.getActiveAcademicTerm()
+        : { year: localStorage.getItem("cc_active_year") || "2nd Year", semester: localStorage.getItem("cc_active_semester") || "2nd Semester" };
+
       await ensureSubjectInSubjects({
         name: subject.trim(),
         schedule: scheduleStr || day || "",
-        year: "1st Year",
-        semester: "1st Semester",
+        year: (currentTerm.year && currentTerm.year !== "All Years") ? currentTerm.year : "2nd Year",
+        semester: (currentTerm.semester && currentTerm.semester !== "All Semesters") ? currentTerm.semester : "2nd Semester",
         professor: "",
       });
 
@@ -2904,61 +2908,170 @@ function getRemoteSession() {
     }
 
     // ===== ACADEMIC TERM RESOLUTION & SCHEDULE FILTERING =====
+    function normalizeYearName(str) {
+      if (!str) return "";
+      var s = str.trim();
+      if (/all/i.test(s)) return "All Years";
+      if (/^1(st)?/i.test(s)) return "1st Year";
+      if (/^2(nd)?/i.test(s)) return "2nd Year";
+      if (/^3(rd)?/i.test(s)) return "3rd Year";
+      if (/^4(th)?/i.test(s)) return "4th Year";
+      if (/^5(th)?/i.test(s)) return "5th Year";
+      if (/^\d+$/.test(s)) {
+        var suff = s === "1" ? "st" : s === "2" ? "nd" : s === "3" ? "rd" : "th";
+        return s + suff + " Year";
+      }
+      return s;
+    }
+
+    function normalizeSemName(str) {
+      if (!str) return "";
+      var s = str.trim();
+      if (/all/i.test(s)) return "All Semesters";
+      if (/summer|midyear/i.test(s)) return "Summer / Midyear";
+      if (/1(st)?/i.test(s)) return "1st Semester";
+      if (/2(nd)?/i.test(s)) return "2nd Semester";
+      return s;
+    }
+
     function getActiveAcademicTerm(subjects) {
       var profile = (typeof getProfile === "function") ? getProfile() : {};
       var user = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
-      var savedYear = (profile && profile.year) || (user && user.year) || localStorage.getItem("cc_active_year") || "";
-      var savedSem = (profile && profile.semester) || (user && user.semester) || localStorage.getItem("cc_active_semester") || "";
 
-      // Clean up year string format
-      if (savedYear && !/year/i.test(savedYear) && /^\d+$/.test(savedYear)) {
-        var suff = savedYear === "1" ? "st" : savedYear === "2" ? "nd" : savedYear === "3" ? "rd" : "th";
-        savedYear = savedYear + suff + " Year";
-      }
+      // 1. Check Schedule active filters in DOM
+      var activeSchedYearBtn = document.querySelector(".schedule-year-filter.active");
+      var schedYearVal = activeSchedYearBtn ? activeSchedYearBtn.getAttribute("data-year") : "";
+      var schedSemEl = document.getElementById("schedule-semester-filter");
+      var schedSemVal = schedSemEl ? schedSemEl.value : "";
 
-      // If user hasn't explicitly specified both in profile, infer from user's subjects
-      if ((!savedYear || !savedSem) && subjects && subjects.length > 0) {
-        var termCounts = {};
+      // 2. Check Settings active selectors in DOM
+      var settingsYearEl = document.getElementById("settings-active-year-select");
+      var settingsYearVal = settingsYearEl ? settingsYearEl.value : "";
+      var settingsSemEl = document.getElementById("settings-active-sem-select");
+      var settingsSemVal = settingsSemEl ? settingsSemEl.value : "";
+
+      // 3. Check localStorage
+      var localYear = localStorage.getItem("cc_active_year") || "";
+      var localSem = localStorage.getItem("cc_active_semester") || "";
+
+      // 4. Check Profile
+      var profYear = (profile && profile.year) || (user && user.year) || (user && user.user_metadata && user.user_metadata.year) || "";
+      var profSem = (profile && profile.semester) || (user && user.semester) || (user && user.user_metadata && user.user_metadata.semester) || "";
+
+      // Prioritize explicit user selection
+      var chosenYear = "";
+      if (schedYearVal && schedYearVal !== "all") chosenYear = schedYearVal;
+      else if (settingsYearVal && settingsYearVal !== "all") chosenYear = settingsYearVal;
+      else if (localYear && localYear !== "all") chosenYear = localYear;
+      else if (profYear) chosenYear = profYear;
+
+      var chosenSem = "";
+      if (schedSemVal && schedSemVal !== "all") chosenSem = schedSemVal;
+      else if (settingsSemVal && settingsSemVal !== "all") chosenSem = settingsSemVal;
+      else if (localSem && localSem !== "all") chosenSem = localSem;
+      else if (profSem) chosenSem = profSem;
+
+      var isAllYears = (schedYearVal === "all" || settingsYearVal === "all" || localYear === "all") && !profYear && !chosenYear;
+      var isAllSems = (schedSemVal === "all" || settingsSemVal === "all" || localSem === "all") && !profSem && !chosenSem;
+
+      // 5. If Year or Semester is not chosen, inspect registered subjects from the database!
+      if (subjects && subjects.length > 0) {
+        var todayIndex = new Date().getDay();
+        var termsWithClassesToday = {};
+        var termsInDb = {};
+
         subjects.forEach(function (s) {
-          var y = (s.year || "").trim();
-          var sem = (s.semester || "").trim();
-          if (y || sem) {
-            var key = (y || "any") + "___" + (sem || "any");
-            termCounts[key] = (termCounts[key] || 0) + 1;
+          var y = normalizeYearName(s.year || "");
+          var sem = normalizeSemName(s.semester || "");
+          if (!y && !sem) return;
+          var key = (y || "Any Year") + "___" + (sem || "Any Semester");
+          termsInDb[key] = (termsInDb[key] || 0) + 1;
+
+          if (s.schedule) {
+            var days = parseDaysFromText(s.schedule);
+            if (days.indexOf(todayIndex) !== -1) {
+              termsWithClassesToday[key] = (termsWithClassesToday[key] || 0) + 1;
+            }
           }
         });
 
-        var bestKey = "";
-        var maxCount = 0;
-        for (var k in termCounts) {
-          if (termCounts[k] > maxCount) {
-            maxCount = termCounts[k];
-            bestKey = k;
+        // If user didn't specify semester, look if their subjects have classes today
+        var bestTermKey = "";
+        var maxToday = 0;
+        for (var tk in termsWithClassesToday) {
+          if (chosenYear) {
+            var yP = tk.split("___")[0];
+            if (normalizeYearName(yP) !== normalizeYearName(chosenYear)) continue;
+          }
+          if (termsWithClassesToday[tk] > maxToday) {
+            maxToday = termsWithClassesToday[tk];
+            bestTermKey = tk;
           }
         }
 
-        if (bestKey) {
-          var parts = bestKey.split("___");
-          if (!savedYear && parts[0] && parts[0] !== "any") savedYear = parts[0];
-          if (!savedSem && parts[1] && parts[1] !== "any") savedSem = parts[1];
+        if (!bestTermKey) {
+          var maxAny = 0;
+          for (var k in termsInDb) {
+            if (chosenYear) {
+              var yP2 = k.split("___")[0];
+              if (normalizeYearName(yP2) !== normalizeYearName(chosenYear)) continue;
+            }
+            if (termsInDb[k] > maxAny) {
+              maxAny = termsInDb[k];
+              bestTermKey = k;
+            }
+          }
+        }
+
+        if (bestTermKey) {
+          var parts = bestTermKey.split("___");
+          if (!chosenYear && parts[0] && parts[0] !== "Any Year") chosenYear = parts[0];
+          if (!chosenSem && parts[1] && parts[1] !== "Any Semester") chosenSem = parts[1];
         }
       }
 
-      if (!savedYear) savedYear = "3rd Year";
-      if (!savedSem) savedSem = "1st Semester";
+      // Final default fallbacks
+      if (!chosenYear && !isAllYears) chosenYear = "2nd Year";
+      if (!chosenSem && !isAllSems) chosenSem = "2nd Semester";
+
+      chosenYear = normalizeYearName(chosenYear);
+      chosenSem = normalizeSemName(chosenSem);
+
+      var isAllY = isAllYears || chosenYear === "All Years";
+      var isAllS = isAllSems || chosenSem === "All Semesters";
+
+      var label = "";
+      if (isAllY && isAllS) {
+        label = "All Registered Subjects";
+      } else if (isAllY) {
+        label = chosenSem;
+      } else if (isAllS) {
+        label = chosenYear;
+      } else {
+        label = chosenYear + " \u2022 " + chosenSem;
+      }
 
       return {
-        year: savedYear,
-        semester: savedSem
+        year: chosenYear || (isAllY ? "All Years" : "2nd Year"),
+        semester: chosenSem || (isAllS ? "All Semesters" : "2nd Semester"),
+        isAllYears: isAllY,
+        isAllSems: isAllS,
+        label: label
       };
     }
 
     function filterSubjectsForActiveTerm(subjects, activeTerm) {
       if (!subjects || subjects.length === 0) return [];
-      if (!activeTerm || (!activeTerm.year && !activeTerm.semester)) return subjects;
+      if (!activeTerm) return subjects;
 
-      var normYear = (activeTerm.year || "").toLowerCase().replace(/[^0-9]/g, "");
-      var normSem = (activeTerm.semester || "").toLowerCase().replace(/[^0-9a-z]/g, "");
+      if (activeTerm.isAllYears && activeTerm.isAllSems) return subjects;
+
+      var normYear = (!activeTerm.isAllYears && activeTerm.year && activeTerm.year !== "All Years")
+        ? (activeTerm.year || "").toLowerCase().replace(/[^0-9]/g, "")
+        : "";
+      var normSem = (!activeTerm.isAllSems && activeTerm.semester && activeTerm.semester !== "All Semesters")
+        ? (activeTerm.semester || "").toLowerCase().replace(/[^0-9a-z]/g, "")
+        : "";
 
       var filtered = subjects.filter(function (s) {
         var sYear = (s.year || "").toLowerCase().replace(/[^0-9]/g, "");
@@ -2984,55 +3097,92 @@ function getRemoteSession() {
       return filtered;
     }
 
-    function updateScheduleActiveTermBadge() {
+    function updateScheduleActiveTermBadge(subjects) {
       try {
-        var active = getActiveAcademicTerm();
-        var label = active.year + " \u2022 " + active.semester;
+        var active = getActiveAcademicTerm(subjects);
+        var label = active.label || (active.year + " \u2022 " + active.semester);
+
         var badgeText = document.getElementById("schedule-active-term-text");
         if (badgeText) badgeText.textContent = label;
+
         var settingsLabel = document.getElementById("settings-active-term-label");
         if (settingsLabel) settingsLabel.textContent = label;
-      } catch (e) {}
+
+        var settingsYearSelect = document.getElementById("settings-active-year-select");
+        if (settingsYearSelect && active.year) {
+          settingsYearSelect.value = active.isAllYears ? "all" : active.year;
+        }
+
+        var settingsSemSelect = document.getElementById("settings-active-sem-select");
+        if (settingsSemSelect && active.semester) {
+          settingsSemSelect.value = active.isAllSems ? "all" : active.semester;
+        }
+      } catch (e) {
+        console.warn("[ClassConnect] Term badge update error:", e);
+      }
     }
 
     function parseDaysFromText(text) {
       if (!text) return [];
-      var str = text.toUpperCase()
-        .replace(/\b(\d{1,2}(:\d{2})?\s*(AM|PM|NN)?)\b/gi, "")
-        .replace(/\b(AM|PM|NN)\b/gi, "");
+      var raw = text.toUpperCase();
+
+      // Clean obvious time stamps so letters in numbers don't conflict
+      var cleaned = raw
+        .replace(/\b\d{1,2}(:\d{2})?\s*(AM|PM|NN)\b/g, "")
+        .replace(/\b\d{1,2}-\d{1,2}(AM|PM|NN)\b/g, "")
+        .replace(/\b(AM|PM|NN)\b/g, "");
+
       var days = new Set();
-      if (str.indexOf("DAILY") !== -1 || str.indexOf("EVERYDAY") !== -1) return [0, 1, 2, 3, 4, 5, 6];
+      if (/DAILY|EVERYDAY/i.test(cleaned)) return [0, 1, 2, 3, 4, 5, 6];
 
-      // Sunday (0)
-      if (str.indexOf("SUNDAY") !== -1 || /\bSUN\b/.test(str)) { days.add(0); str = str.replace(/SUNDAY|\bSUN\b/g, ""); }
-      // Monday (1)
-      if (str.indexOf("MONDAY") !== -1 || /\bMON\b/.test(str)) { days.add(1); str = str.replace(/MONDAY|\bMON\b/g, ""); }
-      // Tuesday (2)
-      if (str.indexOf("TUESDAY") !== -1 || str.indexOf("TUES") !== -1 || /\bTUE\b/.test(str)) { days.add(2); str = str.replace(/TUESDAY|TUES|\bTUE\b/g, ""); }
-      // Wednesday (3)
-      if (str.indexOf("WEDNESDAY") !== -1 || str.indexOf("WEDN") !== -1 || /\bWED\b/.test(str)) { days.add(3); str = str.replace(/WEDNESDAY|WEDN|\bWED\b/g, ""); }
-      // Thursday (4)
-      if (str.indexOf("THURSDAY") !== -1 || str.indexOf("THURS") !== -1 || str.indexOf("THUR") !== -1 || /\bTHU\b/.test(str) || /\bTH\b/.test(str)) {
-        days.add(4);
-        str = str.replace(/THURSDAY|THURS|THUR|\bTHU\b|\bTH\b/g, "");
+      var dayCodeMap = {
+        "SUNDAY": 0, "SUN": 0, "SU": 0, "U": 0,
+        "MONDAY": 1, "MON": 1, "M": 1,
+        "TUESDAY": 2, "TUES": 2, "TUE": 2, "T": 2,
+        "WEDNESDAY": 3, "WEDN": 3, "WED": 3, "W": 3,
+        "THURSDAY": 4, "THURS": 4, "THUR": 4, "THU": 4, "TH": 4, "H": 4,
+        "FRIDAY": 5, "FRI": 5, "F": 5,
+        "SATURDAY": 6, "SAT": 6, "S": 6
+      };
+
+      // Range pattern: Day1 - Day2 (e.g. Wednesday - Thursday, Mon-Fri)
+      var rangeMatch = cleaned.match(/(SUNDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUN|MON|TUES|TUE|WEDN|WED|THURS|THUR|THU|TH|FRI|SAT|\b[MTWHFSU]\b)\s*(?:-|–|—|\bTO\b)\s*(SUNDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUN|MON|TUES|TUE|WEDN|WED|THURS|THUR|THU|TH|FRI|SAT|\b[MTWHFSU]\b)/);
+      if (rangeMatch) {
+        var startD = dayCodeMap[rangeMatch[1]];
+        var endD = dayCodeMap[rangeMatch[2]];
+        if (typeof startD === "number" && typeof endD === "number") {
+          if (startD <= endD) {
+            for (var d = startD; d <= endD; d++) days.add(d);
+          } else {
+            for (var d1 = startD; d1 <= 6; d1++) days.add(d1);
+            for (var d2 = 0; d2 <= endD; d2++) days.add(d2);
+          }
+        }
       }
-      // Friday (5)
-      if (str.indexOf("FRIDAY") !== -1 || /\bFRI\b/.test(str)) { days.add(5); str = str.replace(/FRIDAY|\bFRI\b/g, ""); }
-      // Saturday (6)
-      if (str.indexOf("SATURDAY") !== -1 || /\bSAT\b/.test(str)) { days.add(6); str = str.replace(/SATURDAY|\bSAT\b/g, ""); }
 
-      var tokens = str.split(/[\s,\/|-]+/);
+      // Word-level checks
+      if (/SUNDAY|\bSUN\b/i.test(cleaned)) days.add(0);
+      if (/MONDAY|\bMON\b/i.test(cleaned)) days.add(1);
+      if (/TUESDAY|\bTUES\b|\bTUE\b/i.test(cleaned)) days.add(2);
+      if (/WEDNESDAY|\bWEDN\b|\bWED\b/i.test(cleaned)) days.add(3);
+      if (/THURSDAY|\bTHURS\b|\bTHUR\b|\bTHU\b|\bTH\b/i.test(cleaned)) days.add(4);
+      if (/FRIDAY|\bFRI\b/i.test(cleaned)) days.add(5);
+      if (/SATURDAY|\bSAT\b/i.test(cleaned)) days.add(6);
+
+      // Common schedule combinations
+      if (/\bMWF\b/.test(cleaned) || cleaned.indexOf("M-W-F") !== -1 || cleaned.indexOf("M/W/F") !== -1) { days.add(1); days.add(3); days.add(5); }
+      if (/\bTTH\b/.test(cleaned) || cleaned.indexOf("T-TH") !== -1 || cleaned.indexOf("T/TH") !== -1) { days.add(2); days.add(4); }
+      if (/\bTWTH\b/.test(cleaned) || cleaned.indexOf("T-W-TH") !== -1 || cleaned.indexOf("T/W/TH") !== -1) { days.add(2); days.add(3); days.add(4); }
+      if (/\bWTH\b/.test(cleaned) || cleaned.indexOf("W-TH") !== -1 || cleaned.indexOf("W/TH") !== -1) { days.add(3); days.add(4); }
+      if (/\bFS\b/.test(cleaned)) { days.add(5); days.add(6); }
+      if (/\bSS\b/.test(cleaned)) { days.add(6); days.add(0); }
+
+      // Short letter groupings like TWTH, MTWH
+      var tokens = cleaned.split(/[\s,\/|–—\-]+/);
       tokens.forEach(function (token) {
         if (!token) return;
-        if (token === "MWF") { days.add(1); days.add(3); days.add(5); return; }
-        if (token === "TTH" || token === "T-TH") { days.add(2); days.add(4); return; }
-        if (token === "TWTH") { days.add(2); days.add(3); days.add(4); return; }
-        if (token === "WTH") { days.add(3); days.add(4); return; }
-        if (token === "FS") { days.add(5); days.add(6); return; }
-        if (token === "SS") { days.add(6); days.add(0); return; }
-
-        if (/^[MTWHFSU]+$/.test(token)) {
-          if (token.indexOf("TH") !== -1) { days.add(4); token = token.replace("TH", ""); }
+        if (/^[MTWHFSU]+$/.test(token) && token.length <= 7) {
+          if (token.indexOf("TH") !== -1) { days.add(4); token = token.replace(/TH/g, ""); }
           if (token.indexOf("H") !== -1) days.add(4);
           if (token.indexOf("M") !== -1) days.add(1);
           if (token.indexOf("T") !== -1) days.add(2);
@@ -3048,28 +3198,54 @@ function getRemoteSession() {
 
     function parseStartTimeToMinutes(text) {
       if (!text) return null;
-      var match = text.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i) || text.match(/(\d{1,2})\s*(AM|PM)/i);
-      if (!match) return null;
-      var hours = parseInt(match[1], 10);
-      var mins = match[2] && !isNaN(parseInt(match[2], 10)) ? parseInt(match[2], 10) : 0;
-      var meridiem = (match[3] || (match[2] && isNaN(parseInt(match[2], 10)) ? match[2] : "") || "").toUpperCase();
+      var str = text.trim();
+      var t = str.replace(/noon/gi, "NN").replace(/midday/gi, "NN");
 
-      // If no explicit AM/PM on start time, check if the range specifies PM later (e.g. 1:00 - 3:00 PM)
-      if (!meridiem) {
-        var hasTrailingPM = /PM/i.test(text);
-        var hasTrailingAM = /AM/i.test(text);
-        if (hasTrailingPM && !hasTrailingAM && hours < 7) {
-          meridiem = "PM";
-        } else if (hours >= 7 && hours <= 11) {
-          meridiem = "AM";
-        } else if (hours === 12) {
-          meridiem = "PM";
+      // Match time range start: e.g. "8-9am", "8:00-9:00am", "8am-10am", "1-4pm", "9-12nn"
+      var rangeMatch = t.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM|NN)?\s*(?:-|–|—|\bTO\b)\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|NN)?/i);
+      if (rangeMatch) {
+        var sHour = parseInt(rangeMatch[1], 10);
+        var sMin = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : 0;
+        var sMer = (rangeMatch[3] || "").toUpperCase();
+        var eHour = parseInt(rangeMatch[4], 10);
+        var eMer = (rangeMatch[6] || "").toUpperCase();
+
+        if (!sMer) {
+          if (eMer === "NN") {
+            sMer = sHour < 12 ? "AM" : "NN";
+          } else if (eMer === "PM") {
+            if (sHour >= 7 && sHour <= 11) sMer = "AM";
+            else sMer = "PM";
+          } else if (eMer === "AM") {
+            sMer = "AM";
+          } else {
+            sMer = (sHour >= 7 && sHour <= 11) ? "AM" : (sHour === 12 ? "NN" : "PM");
+          }
         }
+
+        if (sMer === "PM" && sHour < 12) sHour += 12;
+        if (sMer === "AM" && sHour === 12) sHour = 0;
+        if (sMer === "NN") sHour = 12;
+
+        return sHour * 60 + sMin;
       }
 
-      if (meridiem === "PM" && hours < 12) hours += 12;
-      if (meridiem === "AM" && hours === 12) hours = 0;
-      return hours * 60 + mins;
+      // Single time pattern
+      var singleMatch = t.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM|NN)?/i);
+      if (singleMatch) {
+        var h = parseInt(singleMatch[1], 10);
+        var m = singleMatch[2] ? parseInt(singleMatch[2], 10) : 0;
+        var mer = (singleMatch[3] || "").toUpperCase();
+        if (!mer) {
+          mer = (h >= 7 && h <= 11) ? "AM" : (h === 12 ? "NN" : (h < 7 ? "PM" : ""));
+        }
+        if (mer === "PM" && h < 12) h += 12;
+        if (mer === "AM" && h === 12) h = 0;
+        if (mer === "NN") h = 12;
+        return h * 60 + m;
+      }
+
+      return null;
     }
 
     function formatTime12h(timeStr) {
@@ -3087,18 +3263,23 @@ function getRemoteSession() {
       var now = new Date();
       var currentDay = now.getDay();
       var classes = [];
+      var seenMap = {};
 
       (subjects || []).forEach(function (s) {
         if (!s.schedule) return;
         var days = parseDaysFromText(s.schedule);
         if (days.indexOf(currentDay) !== -1) {
           var startMin = parseStartTimeToMinutes(s.schedule);
+          var key = (s.name || "").trim().toLowerCase();
+          seenMap[key] = true;
           classes.push({
             id: s.id,
             name: s.name,
             professor: s.professor || "",
             scheduleText: s.schedule,
             room: s.room || "",
+            year: s.year || "",
+            semester: s.semester || "",
             color: s.color || "#2563EB",
             startMin: startMin !== null ? startMin : 9999
           });
@@ -3109,6 +3290,8 @@ function getRemoteSession() {
         if (!m.day) return;
         var days = parseDaysFromText(m.day);
         if (days.indexOf(currentDay) !== -1) {
+          var key = (m.subject || "").trim().toLowerCase();
+          if (seenMap[key]) return; // Avoid duplicate if already pulled from subjects
           var startMin = m.start_time ? parseStartTimeToMinutes(m.start_time) : null;
           var schedText = (m.start_time ? formatTime12h(m.start_time) : "") + (m.end_time ? " \u2013 " + formatTime12h(m.end_time) : "");
           classes.push({
@@ -3149,33 +3332,38 @@ function getRemoteSession() {
         var now = new Date();
         var dateKey = now.toISOString().split("T")[0];
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         var dayName = dayNames[now.getDay()];
-        var termLabel = activeTerm.year + " \u2022 " + activeTerm.semester;
+        var dateFormatted = dayName + ", " + monthNames[now.getMonth()] + " " + now.getDate();
+        var termLabel = activeTerm.label;
 
-        updateScheduleActiveTermBadge();
+        updateScheduleActiveTermBadge(allSubjects);
 
-        // 1. Daily Morning Digest
+        // 1. Daily Morning Digest (keyed by date and active term to allow term changes)
         var userSuffix = (currentUser && currentUser.id) ? ("_" + currentUser.id) : "";
+        var termKeySuffix = "_" + (activeTerm.year || "any").replace(/\s+/g, "_") + "_" + (activeTerm.semester || "any").replace(/\s+/g, "_");
+
         if (prefs.scheduleDaily && todayClasses.length > 0) {
-          var digestKey = "cc_notif_digest_" + dateKey + userSuffix;
+          var digestKey = "cc_notif_digest_" + dateKey + termKeySuffix + userSuffix;
           if (!localStorage.getItem(digestKey)) {
             var classSummary = todayClasses.map(function (c) {
-              return c.name + (c.scheduleText ? " (" + c.scheduleText + ")" : "");
+              return c.name + (c.scheduleText ? " (" + c.scheduleText + ")" : "") + (c.room ? " [Room " + c.room + "]" : "");
             }).join(", ");
+
             sendNotification(
               "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
-              "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today: " + classSummary,
+              "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today (" + dateFormatted + "): " + classSummary,
               "schedule",
               { view: "view-schedule", tag: "cc_daily_digest" }
             );
             localStorage.setItem(digestKey, "true");
           }
         } else if (prefs.scheduleDaily && todayClasses.length === 0) {
-          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + userSuffix;
+          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + termKeySuffix + userSuffix;
           if (!localStorage.getItem(emptyDigestKey)) {
             sendNotification(
               "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
-              "No classes scheduled for today (" + dayName + ") under your " + termLabel + " subjects. Enjoy your free time!",
+              "No classes scheduled for today (" + dateFormatted + ") under your " + termLabel + " subjects. Enjoy your free time!",
               "schedule",
               { view: "view-schedule", tag: "cc_daily_digest" }
             );
@@ -3231,10 +3419,12 @@ function getRemoteSession() {
 
         var now = new Date();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         var dayName = dayNames[now.getDay()];
-        var termLabel = activeTerm.year + (activeTerm.semester ? " \u2022 " + activeTerm.semester : "");
+        var dateFormatted = dayName + ", " + monthNames[now.getMonth()] + " " + now.getDate();
+        var termLabel = activeTerm.label;
 
-        updateScheduleActiveTermBadge();
+        updateScheduleActiveTermBadge(allSubjects);
         playChime();
         vibrate([150, 80, 150]);
 
@@ -3245,7 +3435,7 @@ function getRemoteSession() {
 
           sendNotification(
             "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
-            "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today: " + summary,
+            "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today (" + dateFormatted + "): " + summary,
             "schedule",
             { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now() }
           );
@@ -3253,7 +3443,7 @@ function getRemoteSession() {
         } else {
           sendNotification(
             "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
-            "No classes scheduled for today (" + dayName + ") under your " + termLabel + " subjects. Enjoy your free time!",
+            "No classes scheduled for today (" + dateFormatted + ") under your " + termLabel + " subjects. Enjoy your free time!",
             "schedule",
             { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now() }
           );
@@ -3543,6 +3733,35 @@ function getRemoteSession() {
       bindToggle("notif-pref-vibration", "vibration");
       bindToggle("notif-pref-sound", "sound");
 
+      var settingsYearSel = document.getElementById("settings-active-year-select");
+      if (settingsYearSel) {
+        settingsYearSel.addEventListener("change", function () {
+          var y = settingsYearSel.value;
+          localStorage.setItem("cc_active_year", y);
+          updateScheduleActiveTermBadge();
+          var schedYearBtns = document.querySelectorAll(".schedule-year-filter");
+          schedYearBtns.forEach(function (b) {
+            if (b.getAttribute("data-year") === y) b.classList.add("active");
+            else b.classList.remove("active");
+          });
+          checkScheduleNotifications();
+        });
+      }
+
+      var settingsSemSel = document.getElementById("settings-active-sem-select");
+      if (settingsSemSel) {
+        settingsSemSel.addEventListener("change", function () {
+          var s = settingsSemSel.value;
+          localStorage.setItem("cc_active_semester", s);
+          updateScheduleActiveTermBadge();
+          var schedSemFilter = document.getElementById("schedule-semester-filter");
+          if (schedSemFilter) {
+            schedSemFilter.value = s;
+          }
+          checkScheduleNotifications();
+        });
+      }
+
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker.addEventListener("message", function (event) {
           if (event.data && event.data.type === "NAVIGATE_VIEW" && event.data.view) {
@@ -3576,6 +3795,9 @@ function getRemoteSession() {
       updateAppBadge: updateAppBadge,
       updateScheduleActiveTermBadge: updateScheduleActiveTermBadge,
       getActiveAcademicTerm: getActiveAcademicTerm,
+      filterSubjectsForActiveTerm: filterSubjectsForActiveTerm,
+      getTodayClasses: getTodayClasses,
+      parseDaysFromText: parseDaysFromText,
       renderNotificationCenter: renderNotificationCenter,
       checkScheduleNotifications: checkScheduleNotifications,
       blastScheduleNotifications: blastScheduleNotifications,
@@ -4263,13 +4485,34 @@ function getRemoteSession() {
       DeviceNotificationManager.checkScheduleNotifications();
 
       var schedYearBtn = document.querySelector(".schedule-year-filter.active");
-      var schedFilterYear = schedYearBtn ? schedYearBtn.getAttribute("data-year") : "all";
+      var schedFilterYear = schedYearBtn ? schedYearBtn.getAttribute("data-year") : (localStorage.getItem("cc_active_year") || "all");
       var schedSemEl = document.getElementById("schedule-semester-filter");
-      var schedFilterSem = schedSemEl ? schedSemEl.value : "all";
+      var schedFilterSem = schedSemEl ? schedSemEl.value : (localStorage.getItem("cc_active_semester") || "all");
+
+      // If set to "all" and user hasn't explicitly chosen "all", inspect database subjects
+      if (schedFilterYear === "all" && schedFilterSem === "all" && !localStorage.getItem("cc_user_chose_all") && allSubjects.length > 0) {
+        if (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function") {
+          var detectedTerm = window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects);
+          if (detectedTerm && detectedTerm.year && detectedTerm.year !== "All Years") {
+            schedFilterYear = detectedTerm.year;
+            var matchBtn = document.querySelector('.schedule-year-filter[data-year="' + schedFilterYear + '"]');
+            if (matchBtn) {
+              document.querySelectorAll(".schedule-year-filter").forEach(function (b) { b.classList.remove("active"); });
+              matchBtn.classList.add("active");
+            }
+          }
+          if (detectedTerm && detectedTerm.semester && detectedTerm.semester !== "All Semesters") {
+            schedFilterSem = detectedTerm.semester;
+            if (schedSemEl) schedSemEl.value = schedFilterSem;
+          }
+        }
+      }
 
       var filteredSubjects = allSubjects.filter(function (s) {
-        var yMatch = (schedFilterYear === "all" || (s.year || "1st Year") === schedFilterYear);
-        var sMatch = (schedFilterSem === "all" || (s.semester || "1st Semester") === schedFilterSem);
+        var sYear = (s.year || "").trim();
+        var sSem = (s.semester || "").trim();
+        var yMatch = (schedFilterYear === "all" || sYear === schedFilterYear || !sYear);
+        var sMatch = (schedFilterSem === "all" || sSem === schedFilterSem || !sSem);
         return yMatch && sMatch;
       });
 
@@ -5269,20 +5512,65 @@ function getRemoteSession() {
 
   function setupScheduleFilters() {
     var filters = document.querySelectorAll(".schedule-year-filter");
+    var savedYear = localStorage.getItem("cc_active_year");
+    if (savedYear) {
+      filters.forEach(function (b) {
+        var by = b.getAttribute("data-year");
+        if (by === savedYear || (savedYear === "All Years" && by === "all")) {
+          b.classList.add("active");
+        } else {
+          b.classList.remove("active");
+        }
+      });
+    }
+
+    var semSelect = document.getElementById("schedule-semester-filter");
+    var savedSem = localStorage.getItem("cc_active_semester");
+    if (semSelect && savedSem) {
+      semSelect.value = (savedSem === "All Semesters") ? "all" : savedSem;
+    }
+
     filters.forEach(function (btn) {
       if (!btn._ccBound) {
         btn._ccBound = true;
         btn.addEventListener("click", function () {
           filters.forEach(function (b) { b.classList.remove("active"); });
           btn.classList.add("active");
+          var y = btn.getAttribute("data-year");
+          if (y === "all") {
+            localStorage.setItem("cc_active_year", "All Years");
+            localStorage.setItem("cc_user_chose_all", "true");
+          } else {
+            localStorage.setItem("cc_active_year", y);
+            localStorage.removeItem("cc_user_chose_all");
+          }
+
+          if (window.DeviceNotificationManager) {
+            window.DeviceNotificationManager.updateScheduleActiveTermBadge();
+            window.DeviceNotificationManager.checkScheduleNotifications();
+          }
           loadSchedule();
         });
       }
     });
-    var semSelect = document.getElementById("schedule-semester-filter");
+
     if (semSelect && !semSelect._ccBound) {
       semSelect._ccBound = true;
-      semSelect.addEventListener("change", function () { loadSchedule(); });
+      semSelect.addEventListener("change", function () {
+        var s = semSelect.value;
+        if (s === "all") {
+          localStorage.setItem("cc_active_semester", "All Semesters");
+        } else {
+          localStorage.setItem("cc_active_semester", s);
+          localStorage.removeItem("cc_user_chose_all");
+        }
+
+        if (window.DeviceNotificationManager) {
+          window.DeviceNotificationManager.updateScheduleActiveTermBadge();
+          window.DeviceNotificationManager.checkScheduleNotifications();
+        }
+        loadSchedule();
+      });
     }
   }
 
