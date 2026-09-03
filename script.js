@@ -343,6 +343,68 @@ function getRemoteSession() {
     }
   }
 
+  // ClassConnect uses Philippine time for academic reminders. The device may
+  // be set to another timezone, so notification dates must not depend on the
+  // phone's locale.
+  var APP_TIME_ZONE = "Asia/Manila";
+  var APP_WEEKDAY_INDEX = {
+    Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
+    Thursday: 4, Friday: 5, Saturday: 6
+  };
+
+  function getPhilippineNowParts() {
+    var now = new Date();
+    try {
+      var parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: APP_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        weekday: "long"
+      }).formatToParts(now);
+      var values = {};
+      parts.forEach(function (part) { values[part.type] = part.value; });
+      return {
+        date: now,
+        year: parseInt(values.year, 10),
+        month: parseInt(values.month, 10),
+        day: parseInt(values.day, 10),
+        hour: parseInt(values.hour, 10),
+        minute: parseInt(values.minute, 10),
+        second: parseInt(values.second, 10),
+        weekday: values.weekday || "Sunday",
+        dayIndex: APP_WEEKDAY_INDEX[values.weekday] != null ? APP_WEEKDAY_INDEX[values.weekday] : now.getDay()
+      };
+    } catch (e) {
+      return {
+        date: now,
+        year: now.getFullYear(),
+        month: now.getMonth() + 1,
+        day: now.getDate(),
+        hour: now.getHours(),
+        minute: now.getMinutes(),
+        second: now.getSeconds(),
+        weekday: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][now.getDay()],
+        dayIndex: now.getDay()
+      };
+    }
+  }
+
+  function getPhilippineDateKey(offsetDays) {
+    var current = getPhilippineNowParts();
+    var shifted = new Date(Date.UTC(current.year, current.month - 1, current.day + (offsetDays || 0)));
+    return shifted.toISOString().slice(0, 10);
+  }
+
+  function compareDateKeys(a, b) {
+    if (!a || !b) return 0;
+    return a < b ? -1 : (a > b ? 1 : 0);
+  }
+
   function isValidEmail(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
@@ -1215,7 +1277,10 @@ function getRemoteSession() {
       var scheduleStr = buildScheduleString(day, startTime, endTime);
       var currentTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
         ? window.DeviceNotificationManager.getActiveAcademicTerm()
-        : { year: localStorage.getItem("cc_active_year") || "2nd Year", semester: localStorage.getItem("cc_active_semester") || "2nd Semester" };
+        : { year: localStorage.getItem("cc_active_year") || "", semester: localStorage.getItem("cc_active_semester") || "", isConfigured: false };
+      if (!currentTerm.isConfigured) {
+        throw new Error("Select your current year and semester before adding a schedule.");
+      }
 
       await ensureSubjectInSubjects({
         name: subject.trim(),
@@ -1262,11 +1327,15 @@ function getRemoteSession() {
       var startTime = data.start_time || current.data.start_time;
       var endTime = data.end_time || current.data.end_time;
       var scheduleStr = buildScheduleString(day, startTime, endTime);
+      var activeTerm = window.DeviceNotificationManager &&
+        typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function"
+        ? window.DeviceNotificationManager.getActiveAcademicTerm()
+        : { year: "", semester: "", isConfigured: false };
       await ensureSubjectInSubjects({
         name: subjectName.trim(),
         schedule: scheduleStr || day || "",
-        year: current.data.year || "1st Year",
-        semester: current.data.semester || "1st Semester",
+        year: current.data.year || activeTerm.year,
+        semester: current.data.semester || activeTerm.semester,
         professor: "",
       });
 
@@ -1310,18 +1379,36 @@ function getRemoteSession() {
   async function addAssignment(text, subject, dueDate) {
     return withAuthCheck(async function () {
       var user = getCurrentUser();
+      var activeTerm = window.DeviceNotificationManager &&
+        typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function"
+        ? window.DeviceNotificationManager.getActiveAcademicTerm()
+        : { year: "", semester: "" };
       var item = {
         user_id: user.id,
         text: text.trim(),
         subject: subject.trim(),
         due_date: dueDate || "",
         completed: false,
+        year: activeTerm.isConfigured ? activeTerm.year : null,
+        semester: activeTerm.isConfigured ? activeTerm.semester : null,
       };
+      var payload = Object.assign({}, item);
       var result = await withTimeout(
-        supabaseTable("assignments").insert(item).select().single(),
+        supabaseTable("assignments").insert(payload).select().single(),
         8000,
         "Assignment add"
       );
+      // Keep older Supabase schemas usable while the new term columns are
+      // added. Subject-linked legacy rows are still filtered safely below.
+      if (result.error && /Could not find the '([^']+)' column/i.test(result.error.message || "")) {
+        delete payload.year;
+        delete payload.semester;
+        result = await withTimeout(
+          supabaseTable("assignments").insert(payload).select().single(),
+          8000,
+          "Assignment add (legacy schema)"
+        );
+      }
       if (result.error) throw result.error;
       return result.data;
     });
@@ -1894,6 +1981,8 @@ function getRemoteSession() {
       email: user.email.toLowerCase(),
       section: data.section ? normalizeSection(data.section) : getProfile().section,
     });
+    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
+    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
     var saved = await upsertRemoteProfile(remoteProfile);
     if (saved && saved.name && remoteUser) remoteUser.name = saved.name;
     return saved;
@@ -1903,7 +1992,13 @@ function getRemoteSession() {
     const user = getCurrentUser();
     if (!user) return {};
     if (remoteProfile) return Object.assign({}, remoteProfile);
-    return { name: user.name, email: user.email, section: "" };
+    return {
+      name: user.name,
+      email: user.email,
+      year: user.year || (user.user_metadata && user.user_metadata.year) || "",
+      semester: user.semester || (user.user_metadata && user.user_metadata.semester) || "",
+      section: ""
+    };
   }
 
   function getProfilePhoto() {
@@ -1942,6 +2037,7 @@ function getRemoteSession() {
       student_id: source.studentId || "",
       course: source.course || "",
       year: source.year || "",
+      semester: source.semester || "",
       section: source.section || "",
       contact: source.contact || "",
       birthdate: source.birthdate || null,
@@ -1963,6 +2059,7 @@ function getRemoteSession() {
       studentId: current.student_id || "",
       course: current.course || "",
       year: current.year || "",
+      semester: current.semester || "",
       section: current.section || "",
       contact: current.contact || "",
       birthdate: current.birthdate || "",
@@ -1989,6 +2086,8 @@ function getRemoteSession() {
       throw response.error;
     }
     remoteProfile = remoteRowToProfile(response.data, user);
+    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
+    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
     return remoteProfile;
   }
 
@@ -2012,7 +2111,7 @@ function getRemoteSession() {
   }
 
   // ===== AUTH functions =====
-  async function signup(name, email, password, studentId, year, section) {
+  async function signup(name, email, password, studentId, year, semester, section) {
     console.log("[ClassConnect] Signup requested for:", email);
 
     if (!isSupabaseReady()) {
@@ -2025,6 +2124,7 @@ function getRemoteSession() {
     var cleanSection = normalizeSection(section || "");
     var cleanStudentId = (studentId || "").trim();
     var cleanYear = (year || "").trim();
+      var cleanSemester = (semester || "").trim();
     var cleanName = name.trim();
 
     try {
@@ -2039,6 +2139,7 @@ function getRemoteSession() {
               name: cleanName,
               student_id: cleanStudentId,
               year: cleanYear,
+              semester: cleanSemester,
               section: cleanSection,
             },
           },
@@ -2066,6 +2167,7 @@ function getRemoteSession() {
           name: cleanName,
           studentId: cleanStudentId,
           year: cleanYear,
+            semester: cleanSemester,
           section: cleanSection,
         });
 
@@ -2938,110 +3040,34 @@ function getRemoteSession() {
       var profile = (typeof getProfile === "function") ? getProfile() : {};
       var user = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
 
-      // 1. Check Schedule active filters in DOM
-      var activeSchedYearBtn = document.querySelector(".schedule-year-filter.active");
-      var schedYearVal = activeSchedYearBtn ? activeSchedYearBtn.getAttribute("data-year") : "";
-      var schedSemEl = document.getElementById("schedule-semester-filter");
-      var schedSemVal = schedSemEl ? schedSemEl.value : "";
-
-      // 2. Check Settings active selectors in DOM
+      // The schedule page filters are for browsing and must never silently
+      // change the term used by notifications.
       var settingsYearEl = document.getElementById("settings-active-year-select");
       var settingsYearVal = settingsYearEl ? settingsYearEl.value : "";
       var settingsSemEl = document.getElementById("settings-active-sem-select");
       var settingsSemVal = settingsSemEl ? settingsSemEl.value : "";
 
-      // 3. Check localStorage
+      // The profile is the source of truth in Supabase. localStorage is only a
+      // fast startup copy while the profile request is being restored.
       var localYear = localStorage.getItem("cc_active_year") || "";
       var localSem = localStorage.getItem("cc_active_semester") || "";
 
-      // 4. Check Profile
       var profYear = (profile && profile.year) || (user && user.year) || (user && user.user_metadata && user.user_metadata.year) || "";
       var profSem = (profile && profile.semester) || (user && user.semester) || (user && user.user_metadata && user.user_metadata.semester) || "";
 
-      // Prioritize explicit user selection
-      var chosenYear = "";
-      if (schedYearVal && schedYearVal !== "all") chosenYear = schedYearVal;
-      else if (settingsYearVal && settingsYearVal !== "all") chosenYear = settingsYearVal;
-      else if (localYear && localYear !== "all") chosenYear = localYear;
-      else if (profYear) chosenYear = profYear;
-
-      var chosenSem = "";
-      if (schedSemVal && schedSemVal !== "all") chosenSem = schedSemVal;
-      else if (settingsSemVal && settingsSemVal !== "all") chosenSem = settingsSemVal;
-      else if (localSem && localSem !== "all") chosenSem = localSem;
-      else if (profSem) chosenSem = profSem;
-
-      var isAllYears = (schedYearVal === "all" || settingsYearVal === "all" || localYear === "all") && !profYear && !chosenYear;
-      var isAllSems = (schedSemVal === "all" || settingsSemVal === "all" || localSem === "all") && !profSem && !chosenSem;
-
-      // 5. If Year or Semester is not chosen, inspect registered subjects from the database!
-      if (subjects && subjects.length > 0) {
-        var todayIndex = new Date().getDay();
-        var termsWithClassesToday = {};
-        var termsInDb = {};
-
-        subjects.forEach(function (s) {
-          var y = normalizeYearName(s.year || "");
-          var sem = normalizeSemName(s.semester || "");
-          if (!y && !sem) return;
-          var key = (y || "Any Year") + "___" + (sem || "Any Semester");
-          termsInDb[key] = (termsInDb[key] || 0) + 1;
-
-          if (s.schedule) {
-            var days = parseDaysFromText(s.schedule);
-            if (days.indexOf(todayIndex) !== -1) {
-              termsWithClassesToday[key] = (termsWithClassesToday[key] || 0) + 1;
-            }
-          }
-        });
-
-        // If user didn't specify semester, look if their subjects have classes today
-        var bestTermKey = "";
-        var maxToday = 0;
-        for (var tk in termsWithClassesToday) {
-          if (chosenYear) {
-            var yP = tk.split("___")[0];
-            if (normalizeYearName(yP) !== normalizeYearName(chosenYear)) continue;
-          }
-          if (termsWithClassesToday[tk] > maxToday) {
-            maxToday = termsWithClassesToday[tk];
-            bestTermKey = tk;
-          }
-        }
-
-        if (!bestTermKey) {
-          var maxAny = 0;
-          for (var k in termsInDb) {
-            if (chosenYear) {
-              var yP2 = k.split("___")[0];
-              if (normalizeYearName(yP2) !== normalizeYearName(chosenYear)) continue;
-            }
-            if (termsInDb[k] > maxAny) {
-              maxAny = termsInDb[k];
-              bestTermKey = k;
-            }
-          }
-        }
-
-        if (bestTermKey) {
-          var parts = bestTermKey.split("___");
-          if (!chosenYear && parts[0] && parts[0] !== "Any Year") chosenYear = parts[0];
-          if (!chosenSem && parts[1] && parts[1] !== "Any Semester") chosenSem = parts[1];
-        }
-      }
-
-      // Final default fallbacks
-      if (!chosenYear && !isAllYears) chosenYear = "2nd Year";
-      if (!chosenSem && !isAllSems) chosenSem = "2nd Semester";
-
+      var chosenYear = localYear || profYear || settingsYearVal;
+      var chosenSem = localSem || profSem || settingsSemVal;
       chosenYear = normalizeYearName(chosenYear);
       chosenSem = normalizeSemName(chosenSem);
 
-      var isAllY = isAllYears || chosenYear === "All Years";
-      var isAllS = isAllSems || chosenSem === "All Semesters";
+      var isAllY = chosenYear === "All Years";
+      var isAllS = chosenSem === "All Semesters";
+      var isConfigured = !!chosenYear && !!chosenSem && !isAllY && !isAllS;
 
       var label = "";
-      if (isAllY && isAllS) {
+      if (!isConfigured) {
+        label = "Select your current year & semester";
+      } else if (isAllY && isAllS) {
         label = "All Registered Subjects";
       } else if (isAllY) {
         label = chosenSem;
@@ -3052,10 +3078,11 @@ function getRemoteSession() {
       }
 
       return {
-        year: chosenYear || (isAllY ? "All Years" : "2nd Year"),
-        semester: chosenSem || (isAllS ? "All Semesters" : "2nd Semester"),
+        year: chosenYear || "",
+        semester: chosenSem || "",
         isAllYears: isAllY,
         isAllSems: isAllS,
+        isConfigured: isConfigured,
         label: label
       };
     }
@@ -3063,6 +3090,7 @@ function getRemoteSession() {
     function filterSubjectsForActiveTerm(subjects, activeTerm) {
       if (!subjects || subjects.length === 0) return [];
       if (!activeTerm) return subjects;
+      if (activeTerm.isConfigured === false) return [];
 
       if (activeTerm.isAllYears && activeTerm.isAllSems) return subjects;
 
@@ -3074,26 +3102,13 @@ function getRemoteSession() {
         : "";
 
       var filtered = subjects.filter(function (s) {
-        var sYear = (s.year || "").toLowerCase().replace(/[^0-9]/g, "");
-        var sSem = (s.semester || "").toLowerCase().replace(/[^0-9a-z]/g, "");
-
-        var matchYear = !normYear || !sYear || sYear === normYear;
-        var matchSem = true;
-        if (normSem && sSem) {
-          if (normSem.indexOf("1") !== -1 && sSem.indexOf("1") !== -1) matchSem = true;
-          else if (normSem.indexOf("2") !== -1 && sSem.indexOf("2") !== -1) matchSem = true;
-          else if (normSem.indexOf("summer") !== -1 && sSem.indexOf("summer") !== -1) matchSem = true;
-          else matchSem = (sSem === normSem);
-        }
-
+        var sYear = normalizeYearName(s.year || "");
+        var sSem = normalizeSemName(s.semester || "");
+        var matchYear = !normYear || normalizeYearName(sYear).toLowerCase() === normalizeYearName(activeTerm.year).toLowerCase();
+        var matchSem = !normSem || normalizeSemName(sSem).toLowerCase() === normalizeSemName(activeTerm.semester).toLowerCase();
         return matchYear && matchSem;
       });
 
-      // If user has subjects with schedules but none explicitly tagged with the chosen year/sem,
-      // fallback to subjects with schedules so no alerts are silently dropped
-      if (filtered.length === 0 && subjects.some(function (s) { return !!s.schedule; })) {
-        return subjects;
-      }
       return filtered;
     }
 
@@ -3260,8 +3275,8 @@ function getRemoteSession() {
     }
 
     function getTodayClasses(subjects, manualSchedule) {
-      var now = new Date();
-      var currentDay = now.getDay();
+      var now = getPhilippineNowParts();
+      var currentDay = now.dayIndex;
       var classes = [];
       var seenMap = {};
 
@@ -3310,6 +3325,20 @@ function getRemoteSession() {
       return classes;
     }
 
+    function filterManualScheduleForActiveTerm(manualSchedule, activeSubjects, activeTerm) {
+      if (!activeTerm || activeTerm.isConfigured === false) return [];
+      var allowedSubjects = {};
+      (activeSubjects || []).forEach(function (subject) {
+        if (subject.name) allowedSubjects[subject.name.trim().toLowerCase()] = true;
+      });
+      return (manualSchedule || []).filter(function (item) {
+        var name = (item.subject || "").trim().toLowerCase();
+        // Manual rows predate year/semester columns, so their linked subject
+        // is the safe source of term ownership.
+        return !!name && !!allowedSubjects[name];
+      });
+    }
+
     async function checkScheduleNotifications() {
       if (!isLoggedIn()) return;
       var currentUser = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
@@ -3326,18 +3355,19 @@ function getRemoteSession() {
 
         // Filter subjects based on current user's active academic year & semester
         var activeTerm = getActiveAcademicTerm(allSubjects);
+        updateScheduleActiveTermBadge(allSubjects);
+        if (!activeTerm.isConfigured) return;
         var subjects = filterSubjectsForActiveTerm(allSubjects, activeTerm);
-        var todayClasses = getTodayClasses(subjects, manualSched);
+        var activeManualSched = filterManualScheduleForActiveTerm(manualSched, subjects, activeTerm);
+        var todayClasses = getTodayClasses(subjects, activeManualSched);
 
-        var now = new Date();
-        var dateKey = now.toISOString().split("T")[0];
+        var now = getPhilippineNowParts();
+        var dateKey = getPhilippineDateKey();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        var dayName = dayNames[now.getDay()];
-        var dateFormatted = dayName + ", " + monthNames[now.getMonth()] + " " + now.getDate();
+        var dayName = now.weekday;
+        var dateFormatted = dayName + ", " + monthNames[now.month - 1] + " " + now.day;
         var termLabel = activeTerm.label;
-
-        updateScheduleActiveTermBadge(allSubjects);
 
         // 1. Daily Morning Digest (keyed by date and active term to allow term changes)
         var userSuffix = (currentUser && currentUser.id) ? ("_" + currentUser.id) : "";
@@ -3371,13 +3401,13 @@ function getRemoteSession() {
           }
         }
 
-        // 2. Upcoming Class Alert (15-20 mins before start)
+        // 2. Upcoming Class Alert (within 30 minutes before start)
         if (prefs.scheduleUpcoming) {
-          var currentMin = now.getHours() * 60 + now.getMinutes();
+          var currentMin = now.hour * 60 + now.minute;
           todayClasses.forEach(function (c) {
             if (c.startMin < 9999) {
               var diff = c.startMin - currentMin;
-              if (diff >= 0 && diff <= 20) {
+              if (diff >= 0 && diff <= 30) {
                 var upcomingKey = "cc_notif_up_" + c.name.replace(/\s+/g, "_") + "_" + dateKey + "_" + c.startMin;
                 if (!localStorage.getItem(upcomingKey)) {
                   var timeDesc = diff === 0 ? "starting now" : "starting in " + diff + " minutes";
@@ -3414,14 +3444,20 @@ function getRemoteSession() {
         var manualSched = results[1] || [];
 
         var activeTerm = getActiveAcademicTerm(allSubjects);
+        if (!activeTerm.isConfigured) {
+          updateScheduleActiveTermBadge(allSubjects);
+          showToast("Select your current year and semester before sending schedule alerts.", "warning");
+          return;
+        }
         var subjects = filterSubjectsForActiveTerm(allSubjects, activeTerm);
-        var todayClasses = getTodayClasses(subjects, manualSched);
+        var activeManualSched = filterManualScheduleForActiveTerm(manualSched, subjects, activeTerm);
+        var todayClasses = getTodayClasses(subjects, activeManualSched);
 
-        var now = new Date();
+        var now = getPhilippineNowParts();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        var dayName = dayNames[now.getDay()];
-        var dateFormatted = dayName + ", " + monthNames[now.getMonth()] + " " + now.getDate();
+        var dayName = now.weekday;
+        var dateFormatted = dayName + ", " + monthNames[now.month - 1] + " " + now.day;
         var termLabel = activeTerm.label;
 
         updateScheduleActiveTermBadge(allSubjects);
@@ -3458,19 +3494,50 @@ function getRemoteSession() {
       }
     }
 
+    function filterAssignmentsForActiveTerm(assignments, activeTerm, subjects) {
+      if (!activeTerm || !activeTerm.isConfigured) return [];
+      var subjectTerms = {};
+      (subjects || []).forEach(function (subject) {
+        if (!subject.name) return;
+        subjectTerms[subject.name.trim().toLowerCase()] = {
+          year: normalizeYearName(subject.year || ""),
+          semester: normalizeSemName(subject.semester || "")
+        };
+      });
+
+      return (assignments || []).filter(function (assignment) {
+        var explicitYear = assignment.year || assignment.year_level || "";
+        var explicitSemester = assignment.semester || "";
+        if (explicitYear || explicitSemester) {
+          return normalizeYearName(explicitYear) === normalizeYearName(activeTerm.year) &&
+            normalizeSemName(explicitSemester) === normalizeSemName(activeTerm.semester);
+        }
+
+        var linked = subjectTerms[(assignment.subject || "").trim().toLowerCase()];
+        // Legacy assignments without term columns are only eligible when the
+        // subject they reference is in the selected term. Unknown/general
+        // assignments are intentionally not notified to avoid false alerts.
+        return !!linked &&
+          linked.year === normalizeYearName(activeTerm.year) &&
+          linked.semester === normalizeSemName(activeTerm.semester);
+      });
+    }
+
     async function checkAssignmentNotifications() {
       if (!isLoggedIn()) return;
       var prefs = getPrefs();
       if (!prefs.enabled || !prefs.assignments) return;
 
       try {
-        var assignments = await getAssignments().catch(function () { return []; });
+        var results = await Promise.all([
+          getAssignments().catch(function () { return []; }),
+          getSubjects().catch(function () { return []; })
+        ]);
+        var activeTerm = getActiveAcademicTerm(results[1] || []);
+        var assignments = filterAssignmentsForActiveTerm(results[0] || [], activeTerm, results[1] || []);
         var uncompleted = assignments.filter(function (a) { return !a.completed; });
-        var now = new Date();
-        var todayKey = now.toISOString().split("T")[0];
-        
-        var tomorrow = new Date(now.getTime() + 86400000);
-        var tmrwKey = tomorrow.toISOString().split("T")[0];
+        var todayKey = getPhilippineDateKey();
+        var tmrwKey = getPhilippineDateKey(1);
 
         uncompleted.forEach(function (a) {
           if (!a.due_date) return;
@@ -4485,9 +4552,9 @@ function getRemoteSession() {
       DeviceNotificationManager.checkScheduleNotifications();
 
       var schedYearBtn = document.querySelector(".schedule-year-filter.active");
-      var schedFilterYear = schedYearBtn ? schedYearBtn.getAttribute("data-year") : (localStorage.getItem("cc_active_year") || "all");
+       var schedFilterYear = schedYearBtn ? schedYearBtn.getAttribute("data-year") : (localStorage.getItem("cc_schedule_filter_year") || localStorage.getItem("cc_active_year") || "all");
       var schedSemEl = document.getElementById("schedule-semester-filter");
-      var schedFilterSem = schedSemEl ? schedSemEl.value : (localStorage.getItem("cc_active_semester") || "all");
+       var schedFilterSem = schedSemEl ? schedSemEl.value : (localStorage.getItem("cc_schedule_filter_semester") || localStorage.getItem("cc_active_semester") || "all");
 
       // If set to "all" and user hasn't explicitly chosen "all", inspect database subjects
       if (schedFilterYear === "all" && schedFilterSem === "all" && !localStorage.getItem("cc_user_chose_all") && allSubjects.length > 0) {
@@ -4729,13 +4796,15 @@ function getRemoteSession() {
 
   function isDueSoon(dueDate) {
     if (!dueDate) return false;
-    var diff = (new Date(dueDate) - new Date()) / 86400000;
+    var dueKey = String(dueDate).slice(0, 10);
+    var todayKey = getPhilippineDateKey();
+    var diff = Math.floor((Date.parse(dueKey + "T00:00:00Z") - Date.parse(todayKey + "T00:00:00Z")) / 86400000);
     return diff >= 0 && diff <= 3;
   }
 
   function isOverdue(dueDate) {
     if (!dueDate) return false;
-    return new Date(dueDate) < new Date();
+    return compareDateKeys(String(dueDate).slice(0, 10), getPhilippineDateKey()) < 0;
   }
 
   // ===== GRADES LOAD =====
@@ -5512,7 +5581,7 @@ function getRemoteSession() {
 
   function setupScheduleFilters() {
     var filters = document.querySelectorAll(".schedule-year-filter");
-    var savedYear = localStorage.getItem("cc_active_year");
+    var savedYear = localStorage.getItem("cc_schedule_filter_year") || localStorage.getItem("cc_active_year");
     if (savedYear) {
       filters.forEach(function (b) {
         var by = b.getAttribute("data-year");
@@ -5525,7 +5594,7 @@ function getRemoteSession() {
     }
 
     var semSelect = document.getElementById("schedule-semester-filter");
-    var savedSem = localStorage.getItem("cc_active_semester");
+    var savedSem = localStorage.getItem("cc_schedule_filter_semester") || localStorage.getItem("cc_active_semester");
     if (semSelect && savedSem) {
       semSelect.value = (savedSem === "All Semesters") ? "all" : savedSem;
     }
@@ -5537,13 +5606,7 @@ function getRemoteSession() {
           filters.forEach(function (b) { b.classList.remove("active"); });
           btn.classList.add("active");
           var y = btn.getAttribute("data-year");
-          if (y === "all") {
-            localStorage.setItem("cc_active_year", "All Years");
-            localStorage.setItem("cc_user_chose_all", "true");
-          } else {
-            localStorage.setItem("cc_active_year", y);
-            localStorage.removeItem("cc_user_chose_all");
-          }
+          localStorage.setItem("cc_schedule_filter_year", y === "all" ? "all" : y);
 
           if (window.DeviceNotificationManager) {
             window.DeviceNotificationManager.updateScheduleActiveTermBadge();
@@ -5558,17 +5621,7 @@ function getRemoteSession() {
       semSelect._ccBound = true;
       semSelect.addEventListener("change", function () {
         var s = semSelect.value;
-        if (s === "all") {
-          localStorage.setItem("cc_active_semester", "All Semesters");
-        } else {
-          localStorage.setItem("cc_active_semester", s);
-          localStorage.removeItem("cc_user_chose_all");
-        }
-
-        if (window.DeviceNotificationManager) {
-          window.DeviceNotificationManager.updateScheduleActiveTermBadge();
-          window.DeviceNotificationManager.checkScheduleNotifications();
-        }
+        localStorage.setItem("cc_schedule_filter_semester", s);
         loadSchedule();
       });
     }
@@ -6031,8 +6084,46 @@ function getRemoteSession() {
     const settings = getSettings();
     const fontSelect = document.getElementById("font-type-select");
     if (fontSelect) fontSelect.value = settings.fontType || "sans-serif";
+    var profile = getProfile();
+    var activeYear = localStorage.getItem("cc_active_year") || profile.year || "";
+    var activeSemester = localStorage.getItem("cc_active_semester") || profile.semester || "";
+    var activeYearSelect = document.getElementById("settings-active-year-select");
+    var activeSemesterSelect = document.getElementById("settings-active-sem-select");
+    if (activeYearSelect && activeYear) activeYearSelect.value = activeYear;
+    if (activeSemesterSelect && activeSemester) activeSemesterSelect.value = activeSemester;
     applySettings(settings);
     updateStorageDisplay();
+  }
+
+  async function saveActiveTermSelection(year, semester) {
+    var allowedYears = ["1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year"];
+    var allowedSemesters = ["1st Semester", "2nd Semester", "Summer / Midyear"];
+    if (allowedYears.indexOf(year) === -1 || allowedSemesters.indexOf(semester) === -1) {
+      throw new Error("Please select both your current year level and semester.");
+    }
+
+    var previousYear = localStorage.getItem("cc_active_year");
+    var previousSemester = localStorage.getItem("cc_active_semester");
+    var previousScheduleYear = localStorage.getItem("cc_schedule_filter_year");
+    var previousScheduleSemester = localStorage.getItem("cc_schedule_filter_semester");
+    localStorage.setItem("cc_active_year", year);
+    localStorage.setItem("cc_active_semester", semester);
+    localStorage.setItem("cc_schedule_filter_year", year);
+    localStorage.setItem("cc_schedule_filter_semester", semester);
+
+    try {
+      await saveProfile({ year: year, semester: semester });
+    } catch (error) {
+      if (previousYear) localStorage.setItem("cc_active_year", previousYear);
+      else localStorage.removeItem("cc_active_year");
+      if (previousSemester) localStorage.setItem("cc_active_semester", previousSemester);
+      else localStorage.removeItem("cc_active_semester");
+      if (previousScheduleYear) localStorage.setItem("cc_schedule_filter_year", previousScheduleYear);
+      else localStorage.removeItem("cc_schedule_filter_year");
+      if (previousScheduleSemester) localStorage.setItem("cc_schedule_filter_semester", previousScheduleSemester);
+      else localStorage.removeItem("cc_schedule_filter_semester");
+      throw error;
+    }
   }
 
   // ===== PROFILE FORM =====
@@ -6485,6 +6576,8 @@ function getRemoteSession() {
   // ================================================================
   // ===== SECRET RESET PASSWORD PAGE & DEEP LINK HANDLING =====
   // ================================================================
+  var activeSupabaseRecovery = null;
+  var recoveryLinkHandled = false;
 
   function extractResetTokenFromUrl(urlStr) {
     if (!urlStr) return null;
@@ -6503,11 +6596,77 @@ function getRemoteSession() {
     }
   }
 
+  function extractPasswordRecoveryFromUrl(urlStr) {
+    if (!urlStr) return null;
+    try {
+      var fakeUrl = urlStr.replace(/^([a-zA-Z0-9._-]+):\/\//, "https://dummy.host/");
+      var parsed = new URL(fakeUrl, window.location.origin);
+      var params = new URLSearchParams(parsed.search || "");
+      if (parsed.hash) {
+        new URLSearchParams(parsed.hash.replace(/^#/, "")).forEach(function (value, key) {
+          if (!params.has(key)) params.set(key, value);
+        });
+      }
+      var token = params.get("reset_token") || params.get("token");
+      var accessToken = params.get("access_token");
+      var refreshToken = params.get("refresh_token");
+      var code = params.get("code");
+      if (!token && !accessToken && !refreshToken && !code) return null;
+      return {
+        token: token ? token.trim() : "",
+        accessToken: accessToken || "",
+        refreshToken: refreshToken || "",
+        code: code || ""
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function getResetRedirectUrl() {
+    var isNative = typeof window.Capacitor !== "undefined" &&
+      typeof window.Capacitor.isNativePlatform === "function" &&
+      window.Capacitor.isNativePlatform();
+    return isNative ? "classconnect://reset-password" : window.location.origin + window.location.pathname;
+  }
+
+  function handlePasswordRecoveryUrl(urlStr) {
+    var recovery = extractPasswordRecoveryFromUrl(urlStr);
+    if (!recovery) return false;
+    recoveryLinkHandled = true;
+    window.__classConnectRecoveryHandled = true;
+
+    if (recovery.token) {
+      activeSupabaseRecovery = null;
+      showResetPasswordPage(recovery.token);
+      return true;
+    }
+
+    activeSupabaseRecovery = recovery;
+    var client = getSupabaseClient();
+    var sessionPromise = recovery.code
+      ? client.auth.exchangeCodeForSession(recovery.code)
+      : client.auth.setSession({
+          access_token: recovery.accessToken,
+          refresh_token: recovery.refreshToken
+        });
+
+    sessionPromise.then(function (result) {
+      if (result && result.error) throw result.error;
+      showResetPasswordPage(null, recovery);
+    }).catch(function (error) {
+      console.error("[ClassConnect] Supabase recovery link could not be opened:", error);
+      activeSupabaseRecovery = null;
+      showResetPasswordPage(null);
+    });
+    return true;
+  }
+
   function getResetToken() {
     return extractResetTokenFromUrl(window.location.href);
   }
 
-  function showResetPasswordPage(token) {
+  function showResetPasswordPage(token, recovery) {
     console.log("[ClassConnect] Routing to secret reset page. Has token:", !!token);
 
     closeDrawer();
@@ -6530,7 +6689,7 @@ function getRemoteSession() {
     hideError("reset-page-error");
     hideError("reset-page-success");
 
-    if (token) {
+    if (token || recovery || activeSupabaseRecovery) {
       if (tokenField) tokenField.value = token;
       if (resetForm) resetForm.style.display = "flex";
       if (expiredState) expiredState.style.display = "none";
@@ -6652,6 +6811,7 @@ function getRemoteSession() {
         var emailInput     = document.getElementById("signup-email");
         var studentIdInput = document.getElementById("signup-student-id");
         var yearInput      = document.getElementById("signup-year");
+        var semesterInput  = document.getElementById("signup-semester");
         var sectionInput   = document.getElementById("signup-section");
         var passwordInput  = document.getElementById("signup-password");
         var confirmInput   = document.getElementById("signup-confirm");
@@ -6659,6 +6819,7 @@ function getRemoteSession() {
         var email     = emailInput     ? (emailInput.value     || "").trim() : "";
         var studentId = studentIdInput ? (studentIdInput.value || "").trim() : "";
         var year      = yearInput      ? (yearInput.value      || "")        : "";
+        var semester  = semesterInput  ? (semesterInput.value  || "")        : "";
         var section   = sectionInput   ? (sectionInput.value   || "").trim() : "";
         var password  = passwordInput  ? (passwordInput.value  || "")        : "";
         var confirm   = confirmInput   ? (confirmInput.value   || "")        : "";
@@ -6666,6 +6827,7 @@ function getRemoteSession() {
         if (!isValidEmail(email)){ showError("signup-error", "Please enter a valid email address."); return; }
         if (!studentId)          { showError("signup-error", "Please enter your Student ID number."); return; }
         if (!year)               { showError("signup-error", "Please select your year level."); return; }
+        if (!semester)           { showError("signup-error", "Please select your current semester."); return; }
         if (!section)            { showError("signup-error", "Please enter your section (e.g. BSIT 3-A)."); return; }
         if (password.length < 6) { showError("signup-error", "Password must be at least 6 characters."); return; }
         if (password !== confirm) { showError("signup-error", "Passwords do not match."); return; }
@@ -6673,7 +6835,7 @@ function getRemoteSession() {
         setButtonLoading(btn, true);
         try {
           var result = await withLoading(function () {
-            return signup(name, email, password, studentId, year, section);
+            return signup(name, email, password, studentId, year, semester, section);
           });
           setButtonLoading(btn, false);
           if (!result.success) { showError("signup-error", result.message); return; }
@@ -6856,7 +7018,11 @@ function getRemoteSession() {
               "Content-Type": "application/json",
               "Authorization": "Bearer " + SUPABASE_ANON_KEY,
             },
-            body: JSON.stringify({ email: email.trim().toLowerCase() }),
+            body: JSON.stringify({
+              email: email.trim().toLowerCase(),
+              redirect_to: getResetRedirectUrl(),
+              redirectTo: getResetRedirectUrl()
+            }),
           });
         })
           .then(function (response) { return response.json(); })
@@ -6900,7 +7066,8 @@ function getRemoteSession() {
         var newPwd = document.getElementById("reset-page-new-password").value;
         var confirmPwd = document.getElementById("reset-page-confirm-password").value;
 
-        if (!token) {
+        var recovery = activeSupabaseRecovery;
+        if (!token && !recovery) {
           showError("reset-page-error", "Reset token is missing or has expired. Please request a new link.");
           var exp = document.getElementById("reset-page-expired");
           if (exp) {
@@ -6923,6 +7090,15 @@ function getRemoteSession() {
         setButtonLoading(btn, true);
 
         withLoading(function () {
+          if (recovery) {
+            return getSupabaseClient().auth.updateUser({ password: newPwd }).then(function (response) {
+              return {
+                success: !response.error,
+                message: response.error ? response.error.message : "Password updated successfully!",
+                error: response.error || null
+              };
+            });
+          }
           return fetch(SUPABASE_URL + "/functions/v1/update-password", {
             method: "POST",
             headers: {
@@ -6930,9 +7106,8 @@ function getRemoteSession() {
               "Authorization": "Bearer " + SUPABASE_ANON_KEY,
             },
             body: JSON.stringify({ token: token, new_password: newPwd }),
-          });
+          }).then(function (response) { return response.json(); });
         })
-          .then(function (response) { return response.json(); })
           .then(function (result) {
             setButtonLoading(btn, false);
             if (result.success) {
@@ -6942,6 +7117,7 @@ function getRemoteSession() {
                 succEl.hidden = false;
               }
               showToast("Password updated! Redirecting to login...", "success");
+              activeSupabaseRecovery = null;
 
               setTimeout(function () {
                 if (window.history && window.history.replaceState) {
@@ -6949,6 +7125,9 @@ function getRemoteSession() {
                 }
                 showPage("login-page");
                 showLoginForm();
+                if (isSupabaseReady()) {
+                  getSupabaseClient().auth.signOut({ scope: "local" }).catch(function () {});
+                }
               }, 2000);
             } else {
               var msg = result.message || "Could not update password.";
@@ -7615,6 +7794,31 @@ function getRemoteSession() {
       });
     }
 
+    var activeYearSelect = document.getElementById("settings-active-year-select");
+    var activeSemesterSelect = document.getElementById("settings-active-sem-select");
+    if (activeYearSelect && activeSemesterSelect) {
+      var saveActiveTerm = function () {
+        var year = activeYearSelect.value;
+        var semester = activeSemesterSelect.value;
+        withLoading(function () {
+          return saveActiveTermSelection(year, semester);
+        }).then(function () {
+          if (window.DeviceNotificationManager) {
+            DeviceNotificationManager.updateScheduleActiveTermBadge();
+            DeviceNotificationManager.runAllReminderChecks();
+          }
+          loadSchedule();
+          loadAssignments();
+          showToast("Current year and semester saved to Supabase.", "success");
+        }).catch(function (error) {
+          loadSettings();
+          showToast(error.message || "Could not save your current academic term.", "error");
+        });
+      };
+      activeYearSelect.addEventListener("change", saveActiveTerm);
+      activeSemesterSelect.addEventListener("change", saveActiveTerm);
+    }
+
     var changePwdBtn = document.getElementById("settings-change-password-btn");
     if (changePwdBtn) {
       changePwdBtn.addEventListener("click", async function () {
@@ -8064,6 +8268,9 @@ function getRemoteSession() {
   function routeAfterSplash() {
     console.log("[ClassConnect] Splash timer completed; checking authentication.");
 
+    if (recoveryLinkHandled || window.__classConnectRecoveryHandled) return;
+    if (handlePasswordRecoveryUrl(window.location.href)) return;
+
     var resetToken = getResetToken();
     if (resetToken) {
       console.log("[ClassConnect] Reset token detected. Showing secret reset password page directly.");
@@ -8240,10 +8447,10 @@ function getRemoteSession() {
     }
 
     async function fetchRemoteVersionInfo() {
-      var urls = [
-        GITHUB_RAW_URL + "?t=" + Date.now(),
-        SERVER_API_URL + "?t=" + Date.now()
-      ];
+      var urls = [];
+      if (!state.isNative) urls.push(new URL("version.json", document.baseURI).href);
+      urls.push(SERVER_API_URL + "?t=" + Date.now());
+      urls.push(GITHUB_RAW_URL + "?t=" + Date.now());
 
       for (var i = 0; i < urls.length; i++) {
         try {
@@ -8315,15 +8522,15 @@ function getRemoteSession() {
 
           // If this update was already dismissed by the user in this version, do not pop up automatically on silent check
           var dismissedVer = localStorage.getItem("cc_dismissed_update_ver");
-          if (!silent || dismissedVer !== String(remote.version)) {
+           if (!remote.forceUpdate && (!silent || dismissedVer !== String(remote.version))) {
             showUpdateModal(remote);
           }
           return { available: true, updateInfo: remote };
         } else {
           state.updateAvailable = false;
           state.updateInfo = null;
-          var now = new Date();
-          var timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+           var now = getPhilippineNowParts();
+           var timeStr = String(now.hour).padStart(2, "0") + ":" + String(now.minute).padStart(2, "0");
           if (descElem) descElem.textContent = "Up to date \u2022 Checked at " + timeStr;
           if (!silent) {
             showUpdateToast("You're using the latest version of ClassConnect (v" + state.currentVersion + ")");
@@ -8682,10 +8889,7 @@ function getRemoteSession() {
           window.Capacitor.Plugins.App.getLaunchUrl().then(function (result) {
             if (result && result.url) {
               console.log("[ClassConnect] App launched via deep link URL:", result.url);
-              var token = extractResetTokenFromUrl(result.url);
-              if (token) {
-                showResetPasswordPage(token);
-              }
+              handlePasswordRecoveryUrl(result.url);
             }
           }).catch(function (launchErr) {
             console.warn("[ClassConnect] getLaunchUrl error:", launchErr);
@@ -8695,10 +8899,7 @@ function getRemoteSession() {
           window.Capacitor.Plugins.App.addListener("appUrlOpen", function (data) {
             console.log("[ClassConnect] App opened with deep link URL:", data ? data.url : null);
             if (data && data.url) {
-              var token = extractResetTokenFromUrl(data.url);
-              if (token) {
-                showResetPasswordPage(token);
-              }
+              handlePasswordRecoveryUrl(data.url);
             }
           });
         } catch (appPluginErr) {
