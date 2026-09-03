@@ -331,8 +331,11 @@ body.body-scroll-lock {
   display:         flex;
   align-items:     center;
   justify-content: center;
-  /* use padding-top/bottom so short phones can still scroll */
-  padding:         32px 16px;
+  /* use padding-top/bottom with safe-area insets so short phones can still scroll */
+  padding-top:     max(32px, calc(16px + env(safe-area-inset-top, 0px)));
+  padding-bottom:  max(32px, calc(16px + env(safe-area-inset-bottom, 0px)));
+  padding-left:    max(16px, env(safe-area-inset-left, 0px));
+  padding-right:   max(16px, env(safe-area-inset-right, 0px));
   position:        relative;
 }
 
@@ -730,8 +733,8 @@ body.body-scroll-lock {
   border:        1px solid rgba(255, 255, 255, 0.18);
   color:         var(--white);
   padding:       0 12px;
-  min-height:    36px;
-  min-width:     36px;
+  min-height:    40px;
+  min-width:     40px;
   border-radius: var(--radius-sm);
   display:       flex;
   align-items:   center;
@@ -784,14 +787,18 @@ body.body-scroll-lock {
 .side-drawer.open { left: 0; }
 
 .drawer-header {
-  padding:     20px 18px;
-  background:  linear-gradient(135deg, var(--deep-navy), #1E3A8A);
-  color:       var(--white);
-  display:     flex;
-  align-items: center;
-  gap:         12px;
-  flex-shrink: 0;
-  position:    relative;
+  padding-top:    max(54px, calc(18px + env(safe-area-inset-top, 0px)));
+  padding-bottom: 20px;
+  padding-left:   max(18px, env(safe-area-inset-left, 0px));
+  padding-right:  max(18px, env(safe-area-inset-right, 0px));
+  background:     linear-gradient(135deg, var(--deep-navy), #1E3A8A);
+  color:          var(--white);
+  display:        flex;
+  align-items:    center;
+  gap:            12px;
+  flex-shrink:    0;
+  position:       relative;
+  box-sizing:     border-box;
 }
 
 .drawer-avatar {
@@ -930,7 +937,10 @@ body.body-scroll-lock {
 .drawer-clear-cache:hover::before { background: #7C3AED; }
 
 .drawer-footer {
-  padding:        14px 18px;
+  padding-top:    14px;
+  padding-bottom: max(16px, calc(14px + env(safe-area-inset-bottom, 0px)));
+  padding-left:   max(18px, env(safe-area-inset-left, 0px));
+  padding-right:  max(18px, env(safe-area-inset-right, 0px));
   font-size:      11px;
   font-weight:    600;
   color:          var(--gray-400);
@@ -939,6 +949,7 @@ body.body-scroll-lock {
   flex-shrink:    0;
   text-transform: uppercase;
   letter-spacing: 0.6px;
+  box-sizing:     border-box;
 }
 
 /* ===== MAIN CONTENT AREA ===== */
@@ -947,7 +958,7 @@ body.body-scroll-lock {
   max-width:  680px;
   width:      100%;
   margin:     0 auto;
-  padding:    24px 16px 100px; /* 100px bottom clears the fixed bottom nav */
+  padding:    20px 16px max(110px, calc(90px + env(safe-area-inset-bottom, 0px))); /* ensures bottom nav and system gesture pill never obscure content */
 }
 
 .dashboard-view { display: none; }
@@ -3364,7 +3375,8 @@ body.body-scroll-lock {
   background:      var(--white);
   border-top:      1px solid var(--gray-200);
   justify-content: space-around;
-  padding:         6px 0 env(safe-area-inset-bottom, 6px);
+  padding-top:     6px;
+  padding-bottom:  max(10px, calc(6px + env(safe-area-inset-bottom, 0px)));
   box-shadow:      0 -4px 16px rgba(15, 23, 42, 0.06);
   z-index:         30;
 }
@@ -3410,6 +3422,9 @@ body.body-scroll-lock {
   justify-content:   center;
   backdrop-filter:   blur(3px);
   -webkit-backdrop-filter: blur(3px);
+  padding-top:       max(0px, env(safe-area-inset-top, 0px));
+  padding-bottom:    max(0px, env(safe-area-inset-bottom, 0px));
+  box-sizing:        border-box;
 }
 
 .modal-overlay.active-modal {
@@ -3422,14 +3437,15 @@ body.body-scroll-lock {
   width:               100%;
   max-width:           500px;
   border-radius:       var(--radius-xl) var(--radius-xl) 0 0;
-  padding:             24px 20px;
+  padding:             24px 20px max(24px, calc(20px + env(safe-area-inset-bottom, 0px)));
   display:             flex;
   flex-direction:      column;
   gap:                 16px;
   animation:           slideUp 0.3s cubic-bezier(0.34, 1.1, 0.64, 1) both;
-  max-height:          92vh;
+  max-height:          calc(92vh - max(0px, env(safe-area-inset-top, 0px)));
   overflow-y:          auto;
   overscroll-behavior: contain;
+  box-sizing:          border-box;
 }
 
 .modal-card::before {
@@ -3737,7 +3753,10 @@ body.body-scroll-lock {
   background:      var(--coral-pink);
   color:           var(--white);
   text-align:      center;
-  padding:         10px 16px;
+  padding-top:     max(10px, calc(10px + env(safe-area-inset-top, 0px)));
+  padding-bottom:  10px;
+  padding-left:    max(16px, env(safe-area-inset-left, 0px));
+  padding-right:   max(16px, env(safe-area-inset-right, 0px));
   font-size:       13px;
   font-weight:     700;
   z-index:         500;
@@ -3746,6 +3765,7 @@ body.body-scroll-lock {
   justify-content: center;
   gap:             8px;
   letter-spacing:  0.3px;
+  box-sizing:      border-box;
 }
 
 .offline-banner[hidden] { display: none !important; }
@@ -4139,10 +4159,23 @@ textarea:focus:not(:focus-visible) {
   }
   .topnav-brand      { font-size: 16px; }
   .topnav-brand i    { font-size: 18px; }
-  .side-drawer       { width: 260px; }
-  .drawer-header     { padding: 16px 14px; }
+  .side-drawer {
+    width: min(290px, 82vw);
+  }
+  .drawer-header {
+    padding-top:    max(52px, calc(16px + env(safe-area-inset-top, 0px)));
+    padding-bottom: 16px;
+    padding-left:   max(14px, env(safe-area-inset-left, 0px));
+    padding-right:  max(14px, env(safe-area-inset-right, 0px));
+  }
+  .drawer-footer {
+    padding-top:    12px;
+    padding-bottom: max(16px, calc(12px + env(safe-area-inset-bottom, 0px)));
+    padding-left:   max(14px, env(safe-area-inset-left, 0px));
+    padding-right:  max(14px, env(safe-area-inset-right, 0px));
+  }
   .drawer-item       { padding: 11px 14px; font-size: 13px; }
-  .modal-card        { padding: 20px 14px; }
+  .modal-card        { padding: 20px 14px max(24px, calc(16px + env(safe-area-inset-bottom, 0px))); }
   .modal-card .form-row { grid-template-columns: 1fr; }
   .post-toolbar      { gap: 3px; padding: 6px; }
   .toolbar-btn       { width: 30px; height: 30px; font-size: 13px; }
@@ -6071,8 +6104,8 @@ body.cc-global-loading .bottom-nav {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.18);
   color: var(--white);
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
