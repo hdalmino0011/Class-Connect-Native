@@ -41,10 +41,10 @@ app.get('/api/app-version', (req, res) => {
       return res.json(data);
     }
     return res.json({
-      version: '1.0.1',
-      versionCode: 2,
+      version: '1.0.0',
+      versionCode: 1,
       releaseDate: '2026-09-03',
-      releaseNotes: ['Stability improvements', 'In-app updater']
+      releaseNotes: ['Stability improvements', 'In-app updater', 'Schedule reminders']
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
