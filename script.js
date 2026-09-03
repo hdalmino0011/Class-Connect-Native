@@ -3042,11 +3042,6 @@ function getRemoteSession() {
 
       // The schedule page filters are for browsing and must never silently
       // change the term used by notifications.
-      var settingsYearEl = document.getElementById("settings-active-year-select");
-      var settingsYearVal = settingsYearEl ? settingsYearEl.value : "";
-      var settingsSemEl = document.getElementById("settings-active-sem-select");
-      var settingsSemVal = settingsSemEl ? settingsSemEl.value : "";
-
       // The profile is the source of truth in Supabase. localStorage is only a
       // fast startup copy while the profile request is being restored.
       var localYear = localStorage.getItem("cc_active_year") || "";
@@ -3055,8 +3050,8 @@ function getRemoteSession() {
       var profYear = (profile && profile.year) || (user && user.year) || (user && user.user_metadata && user.user_metadata.year) || "";
       var profSem = (profile && profile.semester) || (user && user.semester) || (user && user.user_metadata && user.user_metadata.semester) || "";
 
-      var chosenYear = localYear || profYear || settingsYearVal;
-      var chosenSem = localSem || profSem || settingsSemVal;
+      var chosenYear = localYear || profYear;
+      var chosenSem = localSem || profSem;
       chosenYear = normalizeYearName(chosenYear);
       chosenSem = normalizeSemName(chosenSem);
 
