@@ -32,6 +32,21 @@ public class PackageReplacedReceiver extends BroadcastReceiver {
             } catch (Exception e) {
                 Log.w(TAG, "Cache cleanup warning", e);
             }
+
+            // Reopen the updated application immediately so the user does not
+            // remain in the package installer or an old WebView task.
+            try {
+                Intent launchIntent = context.getPackageManager()
+                    .getLaunchIntentForPackage(context.getPackageName());
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                        Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    context.startActivity(launchIntent);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Could not relaunch app after update", e);
+            }
         }
     }
 
