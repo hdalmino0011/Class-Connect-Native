@@ -1,16 +1,17 @@
 {
-  "version": "1.0.1",
-  "versionCode": 2,
-  "releaseDate": "2026-09-03",
-  "title": "ClassConnect v1.0.1 Update",
-  "description": "A new version of ClassConnect is available with performance upgrades, bug fixes, and seamless update detection.",
+  "version": "1.1.0",
+  "versionCode": 3,
+  "releaseDate": "2026-09-04",
+  "title": "ClassConnect v1.1.0 — Reliable Mobile Experience",
+  "description": "A required update with working PDF and school-file viewers, reliable class notifications, acknowledgement fixes, and mobile-first upload controls.",
   "releaseNotes": [
-    "Automatic in-app update detector & background downloader",
-    "Self-clearing cache engine & instant app refresh",
-    "Optimized class schedule reminders and notification badges",
-    "Enhanced smoothness and native performance"
+    "Working Curriculum and School Files PDF viewing with bundled PDF runtime assets",
+    "Reliable class-day notifications with per-user academic-term handling",
+    "Fixed post acknowledgement actions and improved mobile upload alignment",
+    "Required update prompt for every older app version"
   ],
-  "apkUrl": "https://github.com/hdalmino0011/Class-Connect-Native/releases/download/v1.0.1/app-debug.apk",
+  "apkUrl": "https://github.com/hdalmino0011/Class-Connect-Native/releases/latest/download/app-debug.apk",
+  "releasePageUrl": "https://github.com/hdalmino0011/Class-Connect-Native/releases",
   "fallbackUrl": "https://github.com/hdalmino0011/Class-Connect-Native/releases/latest",
-  "forceUpdate": false
+  "forceUpdate": true
 }

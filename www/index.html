@@ -25,7 +25,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <!-- Stylesheet -->
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=1.1.0">
 </head>
 <body>
 
@@ -480,8 +480,16 @@
     <!-- ===== VIEW: SCHEDULE ===== -->
     <div id="view-schedule" class="dashboard-view">
       <div class="view-header">
-        <h2 class="view-heading"><i class="fas fa-calendar-days"></i> My Schedule</h2>
-        <div class="view-header-actions">
+        <div>
+          <h2 class="view-heading"><i class="fas fa-calendar-days"></i> My Schedule</h2>
+          <span id="schedule-active-term-badge" class="schedule-term-indicator" style="font-size: 12px; color: var(--navy-accent); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px;">
+            <i class="fas fa-bell"></i> Alerts Active for: <span id="schedule-active-term-text">3rd Year &bull; 1st Semester</span>
+          </span>
+        </div>
+        <div class="view-header-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <button id="blast-schedule-view-btn" class="btn-secondary" type="button" title="Test and blast schedule notifications for today">
+            <i class="fas fa-bolt"></i> Blast Today's Schedule
+          </button>
           <button id="add-schedule-btn" class="btn-add" type="button">
             <i class="fas fa-plus"></i> Add Schedule
           </button>
@@ -509,10 +517,29 @@
     <!-- ===== VIEW: ASSIGNMENTS ===== -->
     <div id="view-assignments" class="dashboard-view">
       <div class="view-header">
-        <h2 class="view-heading"><i class="fas fa-clipboard-list"></i> Assignments</h2>
+        <div>
+          <h2 class="view-heading"><i class="fas fa-clipboard-list"></i> Assignments</h2>
+          <span id="assignments-active-term-badge" class="schedule-term-indicator" style="font-size: 12px; color: var(--navy-accent); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; margin-top: 4px;">
+            <i class="fas fa-layer-group"></i> Active Term: <span id="assignments-active-term-text">3rd Year &bull; 1st Semester</span>
+          </span>
+        </div>
         <button id="add-assignment-btn" class="btn-add" type="button">
           <i class="fas fa-plus"></i> Add Task
         </button>
+      </div>
+      <div class="curriculum-filters assignments-filter-bar">
+        <button class="assignment-year-filter active" data-year="all">All Years</button>
+        <button class="assignment-year-filter" data-year="1st Year">1st Year</button>
+        <button class="assignment-year-filter" data-year="2nd Year">2nd Year</button>
+        <button class="assignment-year-filter" data-year="3rd Year">3rd Year</button>
+        <button class="assignment-year-filter" data-year="4th Year">4th Year</button>
+        <button class="assignment-year-filter" data-year="5th Year">5th Year</button>
+        <select id="assignments-semester-filter" class="curriculum-semester-filter" aria-label="Filter by Semester">
+          <option value="all">All Semesters</option>
+          <option value="1st Semester">1st Semester</option>
+          <option value="2nd Semester">2nd Semester</option>
+          <option value="Summer / Midyear">Summer / Midyear</option>
+        </select>
       </div>
       <div id="assignments-list" class="assignments-list">
         <!-- assignments rendered by script.js -->
@@ -642,7 +669,7 @@
               <i class="fas fa-cloud-arrow-up"></i>
             </div>
             <div class="dropzone-text">
-              <span class="dropzone-title">Drag &amp; drop school files here or <button type="button" class="dropzone-browse-link" id="files-browse-btn">browse your computer</button></span>
+              <span class="dropzone-title">Drag &amp; drop school files here or <button type="button" class="dropzone-browse-link" id="files-browse-btn">browse your device</button></span>
               <span class="dropzone-hint">Supports PDF, Word, PowerPoint, Excel, Images, Notes, Code &amp; Archives up to 25 MB</span>
             </div>
           </div>
@@ -732,7 +759,7 @@
             <label for="profile-course">Course / Program</label>
             <input type="text" id="profile-course" placeholder="e.g. BS Information Technology">
           </div>
-          <div class="form-row" style="grid-column: 1 / -1;">
+          <div class="form-row" style="grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px;">
             <div class="form-group">
               <label for="profile-year">Year Level</label>
               <select id="profile-year">
@@ -742,6 +769,14 @@
                 <option value="3rd Year" selected>3rd Year</option>
                 <option value="4th Year">4th Year</option>
                 <option value="5th Year">5th Year</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="profile-semester">Current Semester</label>
+              <select id="profile-semester">
+                <option value="1st Semester" selected>1st Semester</option>
+                <option value="2nd Semester">2nd Semester</option>
+                <option value="Summer / Midyear">Summer / Midyear</option>
               </select>
             </div>
             <div class="form-group">
@@ -1014,6 +1049,47 @@
             <input type="checkbox" id="notif-pref-sound" checked>
             <span class="cc-slider"></span>
           </label>
+        </div>
+
+        <!-- Active Academic Term for Schedule Alerts -->
+        <div class="settings-item settings-term-item">
+          <div class="settings-item-left">
+            <i class="fas fa-graduation-cap"></i>
+            <div>
+              <span class="settings-label">Active Academic Term</span>
+              <span class="settings-desc">Schedule notifications, reminders, and alerts follow this term</span>
+            </div>
+          </div>
+          <div class="settings-term-controls">
+            <select id="settings-active-year-select" class="settings-term-select" aria-label="Active Year Level">
+              <option value="1st Year">1st Year</option>
+              <option value="2nd Year">2nd Year</option>
+              <option value="3rd Year">3rd Year</option>
+              <option value="4th Year">4th Year</option>
+              <option value="5th Year">5th Year</option>
+              <option value="all">All Years</option>
+            </select>
+            <select id="settings-active-sem-select" class="settings-term-select" aria-label="Active Semester">
+              <option value="1st Semester">1st Semester</option>
+              <option value="2nd Semester">2nd Semester</option>
+              <option value="Summer / Midyear">Summer / Midyear</option>
+              <option value="all">All Semesters</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Blast Schedule Notifications Row -->
+        <div class="settings-item">
+          <div class="settings-item-left">
+            <i class="fas fa-bolt"></i>
+            <div>
+              <span class="settings-label">Blast Today's Schedule Alert</span>
+              <span class="settings-desc" id="settings-blast-schedule-desc">Alerts classes for active term (<strong id="settings-active-term-label">2nd Year &bull; 2nd Semester</strong>)</span>
+            </div>
+          </div>
+          <button type="button" id="settings-blast-schedule-btn" class="btn-primary">
+            <i class="fas fa-bullhorn"></i> Blast Now
+          </button>
         </div>
 
         <!-- Test Notification Button -->
@@ -1336,11 +1412,14 @@
 
     <!-- Notification Modal Footer -->
     <div class="notif-modal-footer">
-      <button type="button" id="notif-open-settings-btn" class="btn-notif-footer-link">
-        <i class="fas fa-gear"></i> Notification Settings
+      <button type="button" id="notif-open-settings-btn" class="btn-notif-footer-link" title="Notification Settings">
+        <i class="fas fa-gear"></i> <span class="notif-footer-text">Settings</span>
       </button>
-      <button type="button" id="notif-modal-test-btn" class="btn-secondary btn-sm">
-        <i class="fas fa-paper-plane"></i> Test Device Alert
+      <button type="button" id="notif-modal-blast-schedule-btn" class="btn-notif-blast-btn" title="Blast today's schedule alert immediately">
+        <i class="fas fa-bolt"></i> <span>Blast Today's Schedule</span>
+      </button>
+      <button type="button" id="notif-modal-test-btn" class="btn-notif-test-btn" title="Test device notification alert">
+        <i class="fas fa-paper-plane"></i> <span>Test Alert</span>
       </button>
     </div>
   </div>
@@ -1538,11 +1617,16 @@
     </div>
     <form id="subject-task-form" novalidate>
       <input type="hidden" id="subject-task-subject-id">
+      <input type="hidden" id="subject-task-edit-id">
       <div class="form-group">
         <label for="subject-task-text">Task Description</label>
         <input type="text" id="subject-task-text" placeholder="e.g. Read Chapter 3" required>
       </div>
-      <button type="submit" class="btn-primary">
+      <div class="form-group">
+        <label for="subject-task-due-date">Due Date (optional)</label>
+        <input type="date" id="subject-task-due-date">
+      </div>
+      <button type="submit" class="btn-primary" id="subject-task-submit-btn">
         <i class="fas fa-plus"></i> Add Task
       </button>
     </form>
@@ -1599,19 +1683,50 @@
       </button>
     </div>
     <form id="assignment-form" novalidate>
+      <input type="hidden" id="assignment-edit-id">
+      <input type="hidden" id="assignment-task-id">
+      <input type="hidden" id="assignment-subject-id">
       <div class="form-group">
         <label for="assignment-text">Task Description</label>
         <input type="text" id="assignment-text" placeholder="e.g. Submit Project Proposal" required>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="assignment-modal-year">Year Level</label>
+          <select id="assignment-modal-year">
+            <option value="1st Year">1st Year</option>
+            <option value="2nd Year">2nd Year</option>
+            <option value="3rd Year">3rd Year</option>
+            <option value="4th Year">4th Year</option>
+            <option value="5th Year">5th Year</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="assignment-modal-semester">Semester</label>
+          <select id="assignment-modal-semester">
+            <option value="1st Semester">1st Semester</option>
+            <option value="2nd Semester">2nd Semester</option>
+            <option value="Summer / Midyear">Summer / Midyear</option>
+          </select>
+        </div>
+      </div>
       <div class="form-group">
-        <label for="assignment-subject">Subject</label>
-        <input type="text" id="assignment-subject" placeholder="e.g. Web Systems">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
+          <label for="assignment-subject" style="margin-bottom: 0;">Subject</label>
+          <span id="assignment-subject-term-badge" class="badge-term-hint" style="font-size: 11px; font-weight: 600; color: var(--primary-blue); background: var(--pale-blue); padding: 2px 8px; border-radius: 9999px;">Current Term</span>
+        </div>
+        <select id="assignment-subject" class="assignment-subject-select" required>
+          <option value="" disabled selected>Select a subject...</option>
+        </select>
+        <div id="assignment-custom-subject-wrap" style="display: none; margin-top: 8px;">
+          <input type="text" id="assignment-subject-custom" placeholder="Type custom subject name...">
+        </div>
       </div>
       <div class="form-group">
         <label for="assignment-due-date">Due Date (optional)</label>
         <input type="date" id="assignment-due-date">
       </div>
-      <button type="submit" class="btn-primary">
+      <button type="submit" class="btn-primary" id="assignment-submit-btn">
         <i class="fas fa-plus"></i> Add Task
       </button>
     </form>
@@ -1836,7 +1951,7 @@
       <div class="school-file-dropzone" id="school-file-dropzone">
         <i class="fas fa-file-arrow-up school-dropzone-icon"></i>
         <div class="school-dropzone-text">
-          <strong id="school-dropzone-name">Choose a file or drag &amp; drop here</strong>
+          <strong id="school-dropzone-name">Choose a file or drag &amp; drop from your device</strong>
           <span id="school-dropzone-meta">PDF, Word (.docx), PPT, Excel, Images, Code, Notes (Max 25MB)</span>
         </div>
         <input type="file" id="school-file-modal-input" required hidden accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.webp,.gif,.zip,.rar">
@@ -1987,6 +2102,9 @@
 
     <!-- Modal Footer Actions -->
     <div class="app-update-footer">
+      <a id="btn-update-visit-github" href="https://github.com/hdalmino0011/Class-Connect-Native/releases" target="_blank" class="btn-secondary" style="display: none; text-decoration: none; align-items: center; gap: 6px;">
+        <i class="fab fa-github"></i> View Releases
+      </a>
       <button type="button" id="btn-cancel-app-update" class="btn-secondary">
         Later
       </button>
@@ -2031,7 +2149,8 @@
 </div>
 
 <!-- Script -->
+<script src="pdf.min.js"></script>
 <script src="/api/config.js"></script>
-<script src="script.js"></script>
+<script src="script.js?v=1.1.0"></script>
 </body>
 </html>

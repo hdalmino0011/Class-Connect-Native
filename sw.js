@@ -3,14 +3,16 @@
    Cache-first with network fallback
    ========================================================= */
 
-const CACHE_NAME = "classconnect-cache-v3";
+const CACHE_NAME = "classconnect-cache-v4";
 
 const ASSETS_TO_CACHE = [
   "index.html",
   "style.css",
   "script.js",
   "manifest.json",
-  "logo.png"
+  "logo.png",
+  "pdf.min.js",
+  "version.json"
 ];
 
 // Install: pre-cache core app shell

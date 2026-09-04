@@ -7417,3 +7417,16 @@ body.cc-global-loading .bottom-nav {
   opacity: 1;
   pointer-events: auto;
 }
+
+
+/* ClassConnect 1.1.0 mobile file vault and viewer fixes */
+.files-dropzone-card .dropzone-content { flex-direction: column; justify-content: center; text-align: center; }
+.files-dropzone-card .dropzone-left { flex-direction: column; justify-content: center; align-items: center; width: 100%; text-align: center; }
+.files-dropzone-card .dropzone-text, .files-dropzone-card .dropzone-title { text-align: center; width: 100%; }
+.files-dropzone-card .dropzone-right-actions { justify-content: center; width: 100%; }
+.preview-file-title, .preview-generic-card h3 { font-size: 14px !important; line-height: 1.35 !important; max-width: min(62vw, 320px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview-generic-card { max-height: 100%; overflow: auto; }
+.pdf-canvas-viewport { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 14px; background: #0F172A; }
+.pdf-render-canvas { display: block; background: #fff; max-width: none; margin: 0 auto; box-shadow: 0 2px 12px rgba(0,0,0,.35); }
+.pdf-loading-state { display: flex; flex: 1; align-items: center; justify-content: center; gap: 10px; color: #F1F5F9; padding: 24px; text-align: center; }
+@media (max-width: 640px) { .preview-file-title, .preview-generic-card h3 { font-size: 13px !important; max-width: 48vw; } .files-dropzone-card { padding: 22px 16px; } }
