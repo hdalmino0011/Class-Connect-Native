@@ -1146,6 +1146,80 @@ function getRemoteSession() {
     });
   }
 
+  // ===== ACADEMIC TERM & NORMALIZATION HELPERS =====
+  function normalizeYearName(str) {
+    if (!str) return "";
+    var s = String(str).trim();
+    if (/all/i.test(s)) return "All Years";
+    if (/^(1|1st|first|year\s*1)\b/i.test(s)) return "1st Year";
+    if (/^(2|2nd|second|year\s*2)\b/i.test(s)) return "2nd Year";
+    if (/^(3|3rd|third|year\s*3)\b/i.test(s)) return "3rd Year";
+    if (/^(4|4th|fourth|year\s*4)\b/i.test(s)) return "4th Year";
+    if (/^(5|5th|fifth|year\s*5)\b/i.test(s)) return "5th Year";
+    var numMatch = s.match(/\b([1-5])\b/);
+    if (numMatch) {
+      var n = numMatch[1];
+      var suff = n === "1" ? "st" : n === "2" ? "nd" : n === "3" ? "rd" : "th";
+      return n + suff + " Year";
+    }
+    return s;
+  }
+  window.normalizeYearName = normalizeYearName;
+
+  function normalizeSemName(str) {
+    if (!str) return "";
+    var s = String(str).trim();
+    if (/all/i.test(s)) return "All Semesters";
+    if (/summer|midyear/i.test(s)) return "Summer / Midyear";
+    if (/(1|1st|first|sem\s*1)\b/i.test(s)) return "1st Semester";
+    if (/(2|2nd|second|sem\s*2)\b/i.test(s)) return "2nd Semester";
+    return s;
+  }
+  window.normalizeSemName = normalizeSemName;
+
+  function getActiveAcademicTerm(subjects) {
+    if (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function") {
+      return window.DeviceNotificationManager.getActiveAcademicTerm(subjects);
+    }
+    var profile = (typeof getProfile === "function") ? getProfile() : {};
+    var user = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
+    var chosenYear = (profile && profile.year) || (user && user.year) || "";
+    var chosenSem = (profile && profile.semester) || (user && user.semester) || "";
+    if (!chosenYear && Array.isArray(subjects) && subjects.length > 0) {
+      var yMap = {};
+      subjects.forEach(function (s) {
+        if (s.year) {
+          var n = normalizeYearName(s.year);
+          if (n && n !== "All Years") yMap[n] = (yMap[n] || 0) + 1;
+        }
+      });
+      var bestY = Object.keys(yMap).sort(function (a, b) { return yMap[b] - yMap[a]; })[0];
+      if (bestY) chosenYear = bestY;
+    }
+    if (!chosenSem && Array.isArray(subjects) && subjects.length > 0) {
+      var sMap = {};
+      subjects.forEach(function (s) {
+        if (s.semester) {
+          var ns = normalizeSemName(s.semester);
+          if (ns && ns !== "All Semesters") sMap[ns] = (sMap[ns] || 0) + 1;
+        }
+      });
+      var bestS = Object.keys(sMap).sort(function (a, b) { return sMap[b] - sMap[a]; })[0];
+      if (bestS) chosenSem = bestS;
+    }
+    chosenYear = normalizeYearName(chosenYear) || "1st Year";
+    chosenSem = normalizeSemName(chosenSem) || "1st Semester";
+    return {
+      year: chosenYear,
+      semester: chosenSem,
+      isAllYears: chosenYear === "All Years",
+      isAllSems: chosenSem === "All Semesters",
+      isConfigured: true,
+      label: chosenYear + " \u2022 " + chosenSem
+    };
+  }
+  window.getActiveAcademicTerm = getActiveAcademicTerm;
+
   // ===== SUBJECT & TASK HELPERS =====
   function normalizeSubjectName(name) {
     if (!name) return "";
@@ -7130,32 +7204,194 @@ function getRemoteSession() {
     '</div>';
   }
 
+  // ===== PINCH-TO-ZOOM GESTURE ENGINE =====
+  function setupPinchZoom(viewportEl, contentEl) {
+    if (!viewportEl || !contentEl) return;
+
+    var scale = 1.0;
+    var minScale = 1.0;
+    var maxScale = 5.0;
+    var posX = 0;
+    var posY = 0;
+
+    var isPinching = false;
+    var isDragging = false;
+    var initialDistance = 0;
+    var startScale = 1.0;
+    var startX = 0;
+    var startY = 0;
+    var lastTapTime = 0;
+    var hasMoved = false;
+
+    function applyTransform(smooth) {
+      if (smooth) {
+        contentEl.style.transition = "transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)";
+      } else {
+        contentEl.style.transition = "none";
+      }
+      contentEl.style.transformOrigin = "50% 0%";
+      contentEl.style.transform = "translate3d(" + posX + "px, " + posY + "px, 0px) scale(" + scale + ")";
+    }
+
+    function getDistance(t1, t2) {
+      var dx = t1.clientX - t2.clientX;
+      var dy = t1.clientY - t2.clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    viewportEl.addEventListener("touchstart", function (e) {
+      hasMoved = false;
+      if (e.touches.length === 2) {
+        isPinching = true;
+        isDragging = false;
+        initialDistance = getDistance(e.touches[0], e.touches[1]);
+        startScale = scale;
+      } else if (e.touches.length === 1) {
+        var now = Date.now();
+        if (now - lastTapTime < 320) {
+          e.preventDefault();
+          if (scale > 1.2) {
+            scale = 1.0;
+            posX = 0;
+            posY = 0;
+          } else {
+            scale = 2.4;
+            var rect = viewportEl.getBoundingClientRect();
+            var tapX = e.touches[0].clientX - rect.left - rect.width / 2;
+            posX = -tapX * 0.7;
+          }
+          applyTransform(true);
+          lastTapTime = 0;
+          return;
+        }
+        lastTapTime = now;
+
+        if (scale > 1.08) {
+          isDragging = true;
+          startX = e.touches[0].clientX - posX;
+          startY = e.touches[0].clientY - posY;
+        }
+      }
+    }, { passive: false });
+
+    viewportEl.addEventListener("touchmove", function (e) {
+      hasMoved = true;
+      if (isPinching && e.touches.length === 2) {
+        e.preventDefault();
+        var dist = getDistance(e.touches[0], e.touches[1]);
+        if (initialDistance > 0) {
+          var ratio = dist / initialDistance;
+          scale = Math.min(Math.max(startScale * ratio, minScale), maxScale);
+          applyTransform(false);
+        }
+      } else if (isDragging && e.touches.length === 1 && scale > 1.08) {
+        e.preventDefault();
+        posX = e.touches[0].clientX - startX;
+        posY = e.touches[0].clientY - startY;
+
+        var boundX = (viewportEl.clientWidth * (scale - 1)) / 2 + 50;
+        var boundY = (contentEl.offsetHeight * (scale - 1)) / 2 + 100;
+        posX = Math.max(Math.min(posX, boundX), -boundX);
+        posY = Math.max(Math.min(posY, boundY), -boundY);
+
+        applyTransform(false);
+      }
+    }, { passive: false });
+
+    viewportEl.addEventListener("touchend", function (e) {
+      if (isPinching && e.touches.length < 2) {
+        isPinching = false;
+        if (scale < minScale) {
+          scale = minScale;
+          posX = 0;
+          posY = 0;
+          applyTransform(true);
+        } else if (scale > maxScale) {
+          scale = maxScale;
+          applyTransform(true);
+        }
+      }
+      if (isDragging && e.touches.length === 0) {
+        isDragging = false;
+        if (scale <= 1.05) {
+          scale = 1.0;
+          posX = 0;
+          posY = 0;
+          applyTransform(true);
+        }
+      }
+    });
+
+    viewportEl.addEventListener("wheel", function (e) {
+      if (e.ctrlKey || Math.abs(e.deltaY) > 0) {
+        e.preventDefault();
+        var factor = e.deltaY < 0 ? 1.15 : 0.87;
+        var next = Math.min(Math.max(scale * factor, minScale), maxScale);
+        if (next === minScale) {
+          posX = 0;
+          posY = 0;
+        }
+        scale = next;
+        applyTransform(true);
+      }
+    }, { passive: false });
+
+    var mouseActive = false;
+    var mouseStartX = 0;
+    var mouseStartY = 0;
+    viewportEl.addEventListener("mousedown", function (e) {
+      if (scale > 1.08 && e.button === 0) {
+        mouseActive = true;
+        mouseStartX = e.clientX - posX;
+        mouseStartY = e.clientY - posY;
+        viewportEl.style.cursor = "grabbing";
+      }
+    });
+    window.addEventListener("mousemove", function (e) {
+      if (mouseActive && scale > 1.08) {
+        posX = e.clientX - mouseStartX;
+        posY = e.clientY - mouseStartY;
+        applyTransform(false);
+      }
+    });
+    window.addEventListener("mouseup", function () {
+      if (mouseActive) {
+        mouseActive = false;
+        if (viewportEl) viewportEl.style.cursor = scale > 1.08 ? "grab" : "default";
+      }
+    });
+
+    viewportEl.addEventListener("click", function () {
+      if (hasMoved || scale > 1.08) return;
+      var floatingBar = document.getElementById("file-viewer-floating-bar");
+      if (floatingBar) {
+        floatingBar.classList.toggle("hidden-controls");
+      }
+    });
+  }
+
   function renderPdfInViewer(fileSrc, bodyEl, file) {
     bodyEl.innerHTML =
-      '<div class="pdf-viewer-wrap">' +
-        '<div class="pdf-viewer-toolbar">' +
-          '<div class="pdf-toolbar-group">' +
-            '<button type="button" class="pdf-tool-btn" id="pdf-prev-btn" title="Previous Page" disabled><i class="fas fa-chevron-left"></i></button>' +
-            '<span class="pdf-page-indicator">' +
-              '<span id="pdf-current-page">1</span> / <span id="pdf-total-pages">--</span>' +
-            '</span>' +
-            '<button type="button" class="pdf-tool-btn" id="pdf-next-btn" title="Next Page" disabled><i class="fas fa-chevron-right"></i></button>' +
+      '<div class="file-standalone-viewer-wrap">' +
+        '<div class="file-viewport" id="file-zoom-viewport">' +
+          '<div class="file-zoom-content" id="file-zoom-content">' +
+            '<div class="pdf-loading-state" id="pdf-loading-state">' +
+              '<i class="fas fa-circle-notch fa-spin"></i>' +
+              '<span>Loading document...</span>' +
+            '</div>' +
+            '<div class="pdf-pages-flow" id="pdf-pages-flow"></div>' +
           '</div>' +
-          '<div class="pdf-toolbar-group">' +
-            '<button type="button" class="pdf-tool-btn" id="pdf-zoom-out" title="Zoom Out"><i class="fas fa-magnifying-glass-minus"></i></button>' +
-            '<span class="pdf-zoom-level" id="pdf-zoom-level">Fit</span>' +
-            '<button type="button" class="pdf-tool-btn" id="pdf-zoom-in" title="Zoom In"><i class="fas fa-magnifying-glass-plus"></i></button>' +
-            '<button type="button" class="pdf-tool-btn" id="pdf-fit-width" title="Fit Width"><i class="fas fa-arrows-left-right"></i></button>' +
-          '</div>' +
-        '</div>' +
-        '<div class="pdf-canvas-viewport" id="pdf-canvas-viewport">' +
-          '<div class="pdf-loading-state" id="pdf-loading-state">' +
-            '<i class="fas fa-circle-notch fa-spin"></i>' +
-            '<span>Rendering PDF document...</span>' +
-          '</div>' +
-          '<canvas id="pdf-render-canvas" class="pdf-render-canvas" style="display:none;"></canvas>' +
         '</div>' +
       '</div>';
+
+    var viewportEl = document.getElementById("file-zoom-viewport");
+    var zoomContentEl = document.getElementById("file-zoom-content");
+    var loadingState = document.getElementById("pdf-loading-state");
+    var pagesFlow = document.getElementById("pdf-pages-flow");
+
+    if (viewportEl && zoomContentEl) {
+      setupPinchZoom(viewportEl, zoomContentEl);
+    }
 
     if (!window.pdfjsLib) {
       console.warn("[ClassConnect] pdfjsLib is not loaded, showing fallback");
@@ -7182,138 +7418,44 @@ function getRemoteSession() {
       return;
     }
 
-    var pdfDoc = null;
-    var currentPage = 1;
-    var totalPages = 1;
-    var currentScale = 1.0;
-    var isFitWidth = true;
-    var isRendering = false;
-    var pendingPage = null;
-
-    var prevBtn = document.getElementById("pdf-prev-btn");
-    var nextBtn = document.getElementById("pdf-next-btn");
-    var curPageEl = document.getElementById("pdf-current-page");
-    var totalPagesEl = document.getElementById("pdf-total-pages");
-    var zoomOutBtn = document.getElementById("pdf-zoom-out");
-    var zoomInBtn = document.getElementById("pdf-zoom-in");
-    var zoomLevelEl = document.getElementById("pdf-zoom-level");
-    var fitWidthBtn = document.getElementById("pdf-fit-width");
-    var viewportEl = document.getElementById("pdf-canvas-viewport");
-    var loadingState = document.getElementById("pdf-loading-state");
-    var canvas = document.getElementById("pdf-render-canvas");
-
-    function renderPage(num) {
-      if (!pdfDoc) return;
-      isRendering = true;
-
-      pdfDoc.getPage(num).then(function (page) {
-        var baseViewport = page.getViewport({ scale: 1.0 });
-        var targetScale = currentScale;
-
-        if (isFitWidth && viewportEl) {
-          var availWidth = Math.max(viewportEl.clientWidth - 28, 260);
-          targetScale = availWidth / baseViewport.width;
-          if (zoomLevelEl) zoomLevelEl.textContent = Math.round(targetScale * 100) + "%";
-        } else {
-          if (zoomLevelEl) zoomLevelEl.textContent = Math.round(currentScale * 100) + "%";
-        }
-
-        var viewport = page.getViewport({ scale: targetScale });
-        var dpr = window.devicePixelRatio || 1;
-
-        if (!canvas) return;
-        var ctx = canvas.getContext("2d");
-        canvas.width = Math.floor(viewport.width * dpr);
-        canvas.height = Math.floor(viewport.height * dpr);
-        canvas.style.width = Math.floor(viewport.width) + "px";
-        canvas.style.height = Math.floor(viewport.height) + "px";
-
-        var transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
-        var renderContext = {
-          canvasContext: ctx,
-          viewport: viewport,
-          transform: transform
-        };
-
-        var renderTask = page.render(renderContext);
-        renderTask.promise.then(function () {
-          isRendering = false;
-          if (loadingState) loadingState.style.display = "none";
-          canvas.style.display = "block";
-          if (pendingPage !== null) {
-            var nextP = pendingPage;
-            pendingPage = null;
-            renderPage(nextP);
-          }
-        }).catch(function (rendErr) {
-          isRendering = false;
-          console.warn("[ClassConnect] PDF page render error:", rendErr);
-        });
-
-        if (curPageEl) curPageEl.textContent = num;
-        if (prevBtn) prevBtn.disabled = num <= 1;
-        if (nextBtn) nextBtn.disabled = num >= totalPages;
-      }).catch(function (err) {
-        isRendering = false;
-        console.error("[ClassConnect] Error loading PDF page:", err);
-      });
-    }
-
-    function queueRenderPage(num) {
-      if (isRendering) {
-        pendingPage = num;
-      } else {
-        renderPage(num);
-      }
-    }
-
-    if (prevBtn) {
-      prevBtn.addEventListener("click", function () {
-        if (currentPage <= 1) return;
-        currentPage--;
-        queueRenderPage(currentPage);
-      });
-    }
-
-    if (nextBtn) {
-      nextBtn.addEventListener("click", function () {
-        if (currentPage >= totalPages) return;
-        currentPage++;
-        queueRenderPage(currentPage);
-      });
-    }
-
-    if (zoomInBtn) {
-      zoomInBtn.addEventListener("click", function () {
-        isFitWidth = false;
-        currentScale = Math.min(currentScale * 1.25, 3.0);
-        queueRenderPage(currentPage);
-      });
-    }
-
-    if (zoomOutBtn) {
-      zoomOutBtn.addEventListener("click", function () {
-        isFitWidth = false;
-        currentScale = Math.max(currentScale / 1.25, 0.4);
-        queueRenderPage(currentPage);
-      });
-    }
-
-    if (fitWidthBtn) {
-      fitWidthBtn.addEventListener("click", function () {
-        isFitWidth = true;
-        queueRenderPage(currentPage);
-      });
-    }
-
-    // Load document
     var docParam = (typeof pdfData === "string") ? { url: pdfData, disableWorker: true } : { data: pdfData, disableWorker: true, useWorkerFetch: false };
     var loadingTask = window.pdfjsLib.getDocument(docParam);
-    loadingTask.promise.then(function (doc) {
-      pdfDoc = doc;
-      totalPages = doc.numPages;
-      if (totalPagesEl) totalPagesEl.textContent = totalPages;
-      renderPage(currentPage);
+    loadingTask.promise.then(function (pdfDoc) {
+      if (loadingState) loadingState.style.display = "none";
+      var numPages = pdfDoc.numPages || 1;
+
+      for (var pageNum = 1; pageNum <= numPages; pageNum++) {
+        (function (num) {
+          pdfDoc.getPage(num).then(function (page) {
+            var baseViewport = page.getViewport({ scale: 1.0 });
+            var availWidth = Math.max((viewportEl ? viewportEl.clientWidth : window.innerWidth) - 24, 280);
+            var fitScale = availWidth / baseViewport.width;
+            var dpr = Math.max(window.devicePixelRatio || 1, 2.0);
+            var viewport = page.getViewport({ scale: fitScale * dpr });
+
+            var canvas = document.createElement("canvas");
+            canvas.className = "pdf-page-canvas";
+            canvas.width = Math.floor(viewport.width);
+            canvas.height = Math.floor(viewport.height);
+            canvas.style.width = Math.floor(baseViewport.width * fitScale) + "px";
+            canvas.style.height = Math.floor(baseViewport.height * fitScale) + "px";
+
+            var ctx = canvas.getContext("2d");
+            var renderContext = {
+              canvasContext: ctx,
+              viewport: viewport
+            };
+
+            page.render(renderContext).promise.catch(function (rendErr) {
+              console.warn("[ClassConnect] PDF page " + num + " render error:", rendErr);
+            });
+
+            if (pagesFlow) pagesFlow.appendChild(canvas);
+          }).catch(function (pageErr) {
+            console.warn("[ClassConnect] Error loading PDF page " + num + ":", pageErr);
+          });
+        })(pageNum);
+      }
     }).catch(function (err) {
       console.error("[ClassConnect] PDF.js getDocument error:", err);
       bodyEl.innerHTML = renderPdfFallback(file, fileSrc, err.message || "Failed to parse PDF document.");
@@ -7327,32 +7469,40 @@ function getRemoteSession() {
     var titleEl = document.getElementById("preview-file-modal-title");
     var metaEl = document.getElementById("preview-file-meta");
     var bodyEl = document.getElementById("file-preview-body");
-    var iconWrap = document.getElementById("preview-file-icon-wrap");
     var downloadBtn = document.getElementById("preview-download-btn");
+    var floatingBar = document.getElementById("file-viewer-floating-bar");
 
     if (!overlay || !bodyEl) return;
+    if (floatingBar) floatingBar.classList.remove("hidden-controls");
 
     var fileSrc = file.data || file.file_url || file.url;
     if (typeof fileSrc === "string") fileSrc = fileSrc.trim();
     var meta = getFileIconMeta(file.original_name || file.name, file.mime_type);
     if (titleEl) titleEl.textContent = file.name || file.original_name || "File Preview";
     var sizeText = formatFileSize(file.size || (file.data ? Math.round(file.data.length * 0.75) : 0));
-    if (metaEl) metaEl.textContent = meta.label + " • " + (file.category || "School File") + (file.subject ? " • " + file.subject : "") + " • " + sizeText;
-
-    if (iconWrap) {
-      iconWrap.style.background = meta.bg;
-      iconWrap.style.color = meta.color;
-      iconWrap.innerHTML = '<i class="fas ' + meta.icon + '"></i>';
-    }
+    if (metaEl) metaEl.textContent = meta.label + " • " + sizeText;
 
     if (downloadBtn) {
-      downloadBtn.onclick = function () { triggerFileDownload(file); };
+      downloadBtn.onclick = function (e) {
+        e.stopPropagation();
+        triggerFileDownload(file);
+      };
     }
 
     bodyEl.innerHTML = "";
 
     if (meta.type === "image" && fileSrc) {
-      bodyEl.innerHTML = '<div class="preview-img-container"><img src="' + fileSrc + '" alt="' + escapeHtml(file.name) + '" class="preview-full-img"></div>';
+      bodyEl.innerHTML =
+        '<div class="file-standalone-viewer-wrap">' +
+          '<div class="file-viewport" id="file-zoom-viewport">' +
+            '<div class="file-zoom-content" id="file-zoom-content">' +
+              '<img src="' + fileSrc + '" alt="' + escapeHtml(file.name) + '" class="preview-standalone-img">' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      var vp = document.getElementById("file-zoom-viewport");
+      var zc = document.getElementById("file-zoom-content");
+      if (vp && zc) setupPinchZoom(vp, zc);
     } else if (meta.type === "pdf" && fileSrc) {
       renderPdfInViewer(fileSrc, bodyEl, file);
     } else if (meta.type === "text" && fileSrc && fileSrc.startsWith("data:text/")) {

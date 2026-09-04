@@ -1964,19 +1964,17 @@
 <!-- ==================== FILE PREVIEW MODAL ==================== -->
 <div id="file-preview-modal-overlay" class="modal-overlay file-preview-overlay" aria-hidden="true">
   <div class="modal-card file-preview-modal-card" role="dialog" aria-modal="true" aria-labelledby="preview-file-modal-title">
-    <div class="modal-header file-preview-modal-header">
-      <div class="file-preview-header-info">
-        <div class="file-preview-icon-wrap" id="preview-file-icon-wrap">
-          <i class="fas fa-file" id="preview-file-icon"></i>
-        </div>
-        <div>
-          <h3 id="preview-file-modal-title" class="preview-file-title">File Preview</h3>
-          <span class="file-preview-meta" id="preview-file-meta">PDF • 1.2 MB</span>
-        </div>
+    <!-- Floating safe-area controls placed safely below system status bar and battery -->
+    <div class="file-viewer-floating-bar" id="file-viewer-floating-bar">
+      <div class="file-viewer-pill-info" id="file-viewer-pill-info">
+        <span id="preview-file-modal-title" class="preview-file-title">File Preview</span>
+        <span class="file-preview-meta" id="preview-file-meta" style="display:none;"></span>
       </div>
-      <div class="file-preview-header-actions">
-        <button type="button" class="btn-secondary btn-sm" id="preview-download-btn"><i class="fas fa-download"></i> Download</button>
-        <button id="close-file-preview-modal-btn" class="modal-close" aria-label="Close">
+      <div class="file-viewer-floating-actions">
+        <button type="button" class="file-viewer-floating-btn" id="preview-download-btn" title="Download file" aria-label="Download">
+          <i class="fas fa-arrow-down-to-bracket"></i>
+        </button>
+        <button type="button" class="file-viewer-floating-btn file-viewer-close-btn" id="close-file-preview-modal-btn" title="Close" aria-label="Close">
           <i class="fas fa-xmark"></i>
         </button>
       </div>
