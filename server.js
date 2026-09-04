@@ -41,8 +41,8 @@ app.get('/api/app-version', (req, res) => {
       return res.json(data);
     }
     return res.json({
-      version: '1.0.0',
-      versionCode: 1,
+      version: '1.1.0',
+      versionCode: 3,
       releaseDate: '2026-09-03',
       releaseNotes: ['Stability improvements', 'In-app updater', 'Schedule reminders']
     });

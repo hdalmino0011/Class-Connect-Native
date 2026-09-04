@@ -2683,8 +2683,14 @@ function getRemoteSession() {
       email: user.email.toLowerCase(),
       section: data.section ? normalizeSection(data.section) : getProfile().section,
     });
-    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
-    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
+    if (remoteProfile.year) {
+      localStorage.setItem("cc_active_year", remoteProfile.year);
+      if (user && user.id) localStorage.setItem("cc_active_year_" + user.id, remoteProfile.year);
+    }
+    if (remoteProfile.semester) {
+      localStorage.setItem("cc_active_semester", remoteProfile.semester);
+      if (user && user.id) localStorage.setItem("cc_active_semester_" + user.id, remoteProfile.semester);
+    }
     var saved = await upsertRemoteProfile(remoteProfile);
     if (saved && saved.name && remoteUser) remoteUser.name = saved.name;
     return saved;
@@ -2788,8 +2794,14 @@ function getRemoteSession() {
       throw response.error;
     }
     remoteProfile = remoteRowToProfile(response.data, user);
-    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
-    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
+    if (remoteProfile.year) {
+      localStorage.setItem("cc_active_year", remoteProfile.year);
+      if (user && user.id) localStorage.setItem("cc_active_year_" + user.id, remoteProfile.year);
+    }
+    if (remoteProfile.semester) {
+      localStorage.setItem("cc_active_semester", remoteProfile.semester);
+      if (user && user.id) localStorage.setItem("cc_active_semester_" + user.id, remoteProfile.semester);
+    }
     return remoteProfile;
   }
 
@@ -3748,14 +3760,16 @@ function getRemoteSession() {
       // change the term used by notifications.
       // The profile is the source of truth in Supabase. localStorage is only a
       // fast startup copy while the profile request is being restored.
-      var localYear = localStorage.getItem("cc_active_year") || "";
-      var localSem = localStorage.getItem("cc_active_semester") || "";
+      var scopedYearKey = user && user.id ? "cc_active_year_" + user.id : "cc_active_year";
+      var scopedSemKey = user && user.id ? "cc_active_semester_" + user.id : "cc_active_semester";
+      var localYear = localStorage.getItem(scopedYearKey) || localStorage.getItem("cc_active_year") || "";
+      var localSem = localStorage.getItem(scopedSemKey) || localStorage.getItem("cc_active_semester") || "";
 
       var profYear = (profile && profile.year) || (user && user.year) || (user && user.user_metadata && user.user_metadata.year) || "";
       var profSem = (profile && profile.semester) || (user && user.semester) || (user && user.user_metadata && user.user_metadata.semester) || "";
 
-      var chosenYear = localYear || profYear;
-      var chosenSem = localSem || profSem;
+      var chosenYear = profYear || localYear;
+      var chosenSem = profSem || localSem;
       chosenYear = normalizeYearName(chosenYear);
       chosenSem = normalizeSemName(chosenSem);
 
@@ -4091,8 +4105,15 @@ function getRemoteSession() {
         var subjects = filterSubjectsForActiveTerm(allSubjects, activeTerm);
         var activeManualSched = filterManualScheduleForActiveTerm(manualSched, subjects, activeTerm);
         var todayClasses = getTodayClasses(subjects, activeManualSched);
+        var allTodayClasses = getTodayClasses(allSubjects, manualSched);
+        if (todayClasses.length === 0 && allTodayClasses.length > 0) {
+          var activeNames = {};
+          subjects.forEach(function (s) { activeNames[(s.name || "").trim().toLowerCase()] = true; });
+          var hasActiveTermMatch = allTodayClasses.some(function (c) { return activeNames[(c.name || "").trim().toLowerCase()]; });
+          if (!hasActiveTermMatch) todayClasses = allTodayClasses;
+        }
 
-        var now = getPhilippineNowParts();
+        var now = getPhilippineNowParts;
         var dateKey = getPhilippineDateKey();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -4539,6 +4560,8 @@ function getRemoteSession() {
         settingsYearSel.addEventListener("change", function () {
           var y = settingsYearSel.value;
           localStorage.setItem("cc_active_year", y);
+           var activeUserForTerm = getCurrentUser();
+           if (activeUserForTerm && activeUserForTerm.id) localStorage.setItem("cc_active_year_" + activeUserForTerm.id, y);
           updateScheduleActiveTermBadge();
           var schedYearBtns = document.querySelectorAll(".schedule-year-filter");
           schedYearBtns.forEach(function (b) {
@@ -4554,6 +4577,8 @@ function getRemoteSession() {
         settingsSemSel.addEventListener("change", function () {
           var s = settingsSemSel.value;
           localStorage.setItem("cc_active_semester", s);
+           var activeUserForTerm = getCurrentUser();
+           if (activeUserForTerm && activeUserForTerm.id) localStorage.setItem("cc_active_semester_" + activeUserForTerm.id, s);
           updateScheduleActiveTermBadge();
           var schedSemFilter = document.getElementById("schedule-semester-filter");
           if (schedSemFilter) {
@@ -4956,7 +4981,7 @@ function getRemoteSession() {
       feed.querySelectorAll(".btn-acknowledge").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var postId = btn.getAttribute("data-id");
-          withLoading(function () { return togglePostAcknowledgment(postId); }).then(function () {
+          withLoading(function () { return toggleAcknowledgePost(postId); }).then(function () {
             loadPosts(document.getElementById("dashboard-search-input") ? document.getElementById("dashboard-search-input").value : "");
           }).catch(function (err) {
             showToast(err.message || "Could not toggle acknowledgment.", "error");
@@ -6979,8 +7004,15 @@ function getRemoteSession() {
   }
 
   function base64ToUint8Array(base64) {
-    var raw = base64;
-    if (raw.indexOf(",") !== -1) raw = raw.split(",")[1];
+    var raw = String(base64 || "");
+    var commaIndex = raw.indexOf(",");
+    if (commaIndex !== -1) {
+      var header = raw.slice(0, commaIndex);
+      raw = raw.slice(commaIndex + 1);
+      if (header.indexOf(";base64") === -1) raw = unescape(encodeURIComponent(decodeURIComponent(raw)));
+    }
+    raw = raw.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    while (raw.length % 4) raw += "=";
     var binaryString = atob(raw);
     var len = binaryString.length;
     var bytes = new Uint8Array(len);
@@ -7097,17 +7129,17 @@ function getRemoteSession() {
 
     try {
       if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = "pdf.worker.min.js";
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdf.worker.min.js", document.baseURI).href;
       }
     } catch (workerErr) {}
 
     var pdfData;
     try {
-      if (typeof fileSrc === "string" && fileSrc.indexOf("data:") === 0) {
-        pdfData = base64ToUint8Array(fileSrc);
-      } else {
-        pdfData = fileSrc;
-      }
+      var sourceText = typeof fileSrc === "string" ? fileSrc.trim() : "";
+      var isRawBase64 = sourceText && !/^https?:\/\//i.test(sourceText) && !/^blob:/i.test(sourceText) && /^[A-Za-z0-9+/_=-]+$/.test(sourceText) && sourceText.length > 100;
+      if (sourceText.indexOf("data:") === 0 || isRawBase64) pdfData = base64ToUint8Array(sourceText);
+      else if (sourceText) pdfData = sourceText;
+      else throw new Error("File data is unavailable.");
     } catch (convErr) {
       console.error("[ClassConnect] Failed to decode PDF base64:", convErr);
       bodyEl.innerHTML = renderPdfFallback(file, fileSrc, "Could not decode file data.");
@@ -7239,7 +7271,7 @@ function getRemoteSession() {
     }
 
     // Load document
-    var docParam = (typeof pdfData === "string") ? { url: pdfData } : { data: pdfData };
+    var docParam = (typeof pdfData === "string") ? { url: pdfData, disableWorker: true } : { data: pdfData, disableWorker: true, useWorkerFetch: false };
     var loadingTask = window.pdfjsLib.getDocument(docParam);
     loadingTask.promise.then(function (doc) {
       pdfDoc = doc;
@@ -7265,6 +7297,7 @@ function getRemoteSession() {
     if (!overlay || !bodyEl) return;
 
     var fileSrc = file.data || file.file_url || file.url;
+    if (typeof fileSrc === "string") fileSrc = fileSrc.trim();
     var meta = getFileIconMeta(file.original_name || file.name, file.mime_type);
     if (titleEl) titleEl.textContent = file.name || file.original_name || "File Preview";
     var sizeText = formatFileSize(file.size || (file.data ? Math.round(file.data.length * 0.75) : 0));
@@ -9692,8 +9725,8 @@ function getRemoteSession() {
   // IN-APP UPDATE & CACHE PURGE MANAGER
   // ==========================================
   var AppUpdateManager = (function () {
-    var CURRENT_VERSION = "1.0.0";
-    var CURRENT_BUILD = 1;
+    var CURRENT_VERSION = "1.1.0";
+    var CURRENT_BUILD = 3;
     var GITHUB_RAW_URL = "https://raw.githubusercontent.com/hdalmino0011/Class-Connect-Native/main/version.json";
     var SERVER_API_URL = "/api/app-version";
 
@@ -9903,7 +9936,7 @@ function getRemoteSession() {
 
           // If this update was already dismissed by the user in this version, do not pop up automatically on silent check
           var dismissedVer = localStorage.getItem("cc_dismissed_update_ver");
-           if (!remote.forceUpdate && (!silent || dismissedVer !== String(remote.version))) {
+           if (remote.forceUpdate || !silent || dismissedVer !== String(remote.version)) {
             showUpdateModal(remote);
           }
           return { available: true, updateInfo: remote };

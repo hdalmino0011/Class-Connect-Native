@@ -1146,12 +1146,35 @@ function getRemoteSession() {
     });
   }
 
-  async function addSubjectTask(subjectId, text) {
+  // ===== SUBJECT & TASK HELPERS =====
+  function normalizeSubjectName(name) {
+    if (!name) return "";
+    return String(name)
+      .toLowerCase()
+      .replace(/\s*\((lec|lab|lecture|laboratory)\)\s*/gi, "")
+      .replace(/[^a-z0-9]/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function normalizeTaskText(text) {
+    if (!text) return "";
+    return String(text)
+      .toLowerCase()
+      .replace(/[^a-z0-9]/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  async function addSubjectTask(subjectId, text, dueDate) {
     return withAuthCheck(async function () {
       var user = getCurrentUser();
+      var cleanText = (text || "").trim();
+      var cleanDue = dueDate ? String(dueDate).substring(0, 10) : "";
+
       var subj = await withTimeout(
         supabaseTable("subjects")
-          .select("tasks")
+          .select("*")
           .eq("id", subjectId)
           .eq("user_id", user.id)
           .single(),
@@ -1159,9 +1182,59 @@ function getRemoteSession() {
         "Subject fetch"
       );
       if (subj.error) throw subj.error;
-      var tasks = subj.data.tasks || [];
-      var newTask = { id: cryptoId(), text: text.trim(), completed: false };
+      var subjectData = subj.data;
+      var tasks = Array.isArray(subjectData.tasks) ? subjectData.tasks.slice() : [];
+      var taskId = cryptoId();
+
+      // Mirror task into 'assignments' table
+      var createdAssignmentId = null;
+      try {
+        var assignmentPayload = {
+          user_id: user.id,
+          text: cleanText,
+          subject: subjectData.name,
+          due_date: cleanDue,
+          completed: false,
+          year: subjectData.year || null,
+          semester: subjectData.semester || null,
+          subject_id: subjectId,
+          task_id: taskId
+        };
+        var assignRes = await withTimeout(
+          supabaseTable("assignments").insert(assignmentPayload).select().single(),
+          8000,
+          "Assignment add from subject task"
+        );
+        while (assignRes.error && /Could not find the '([^']+)' column/i.test(assignRes.error.message || "")) {
+          var match = assignRes.error.message.match(/Could not find the '([^']+)' column/i);
+          var missingCol = match ? match[1] : null;
+          if (missingCol && assignmentPayload.hasOwnProperty(missingCol)) {
+            delete assignmentPayload[missingCol];
+            assignRes = await withTimeout(
+              supabaseTable("assignments").insert(assignmentPayload).select().single(),
+              8000,
+              "Assignment add from subject task (schema fallback)"
+            );
+          } else {
+            break;
+          }
+        }
+        if (!assignRes.error && assignRes.data) {
+          createdAssignmentId = assignRes.data.id;
+        }
+      } catch (assignErr) {
+        console.warn("[ClassConnect] Warning: Could not create mirror assignment:", assignErr);
+      }
+
+      var newTask = {
+        id: taskId,
+        text: cleanText,
+        completed: false,
+        due_date: cleanDue,
+        assignment_id: createdAssignmentId
+      };
       tasks.push(newTask);
+
       var result = await withTimeout(
         supabaseTable("subjects")
           .update({ tasks: tasks })
@@ -1177,12 +1250,135 @@ function getRemoteSession() {
     });
   }
 
+  async function updateSubjectTask(subjectId, taskId, fields) {
+    return withAuthCheck(async function () {
+      var user = getCurrentUser();
+      var cleanText = fields.text !== undefined ? String(fields.text).trim() : undefined;
+      var cleanDue = fields.due_date !== undefined ? String(fields.due_date).substring(0, 10) : undefined;
+      var targetSubjectName = fields.subject ? String(fields.subject).trim() : null;
+
+      var subjRes = await withTimeout(
+        supabaseTable("subjects")
+          .select("*")
+          .eq("id", subjectId)
+          .eq("user_id", user.id)
+          .single(),
+        8000,
+        "Subject fetch for task update"
+      );
+      if (subjRes.error) throw subjRes.error;
+      var currentSubject = subjRes.data;
+      var tasks = Array.isArray(currentSubject.tasks) ? currentSubject.tasks.slice() : [];
+      var taskIdx = tasks.findIndex(function (t) { return String(t.id) === String(taskId); });
+      if (taskIdx === -1) {
+        throw new Error("Task not found under subject.");
+      }
+
+      var prevTask = tasks[taskIdx];
+      var newText = cleanText !== undefined ? cleanText : prevTask.text;
+      var newDue = cleanDue !== undefined ? cleanDue : (prevTask.due_date || "");
+
+      // Check if target subject changed
+      var allSubjects = await getSubjects().catch(function () { return []; });
+      var normTargetSubj = targetSubjectName ? normalizeSubjectName(targetSubjectName) : normalizeSubjectName(currentSubject.name);
+      var matchedTargetSubject = allSubjects.find(function (s) {
+        return normalizeSubjectName(s.name) === normTargetSubj || (s.name || "").trim().toLowerCase() === (targetSubjectName || "").toLowerCase();
+      });
+
+      var isMovingSubject = matchedTargetSubject && matchedTargetSubject.id !== currentSubject.id;
+
+      if (isMovingSubject) {
+        tasks.splice(taskIdx, 1);
+        await supabaseTable("subjects").update({ tasks: tasks }).eq("id", currentSubject.id).eq("user_id", user.id);
+
+        var destSubjRes = await supabaseTable("subjects").select("tasks").eq("id", matchedTargetSubject.id).eq("user_id", user.id).single();
+        var destTasks = (destSubjRes.data && Array.isArray(destSubjRes.data.tasks)) ? destSubjRes.data.tasks.slice() : [];
+        var updatedTask = {
+          id: prevTask.id || taskId,
+          text: newText,
+          completed: prevTask.completed || false,
+          due_date: newDue,
+          assignment_id: prevTask.assignment_id || null
+        };
+        destTasks.push(updatedTask);
+        await supabaseTable("subjects").update({ tasks: destTasks }).eq("id", matchedTargetSubject.id).eq("user_id", user.id);
+      } else {
+        tasks[taskIdx].text = newText;
+        tasks[taskIdx].due_date = newDue;
+        await supabaseTable("subjects").update({ tasks: tasks }).eq("id", currentSubject.id).eq("user_id", user.id);
+      }
+
+      // Sync with assignments table
+      try {
+        var assignId = prevTask.assignment_id;
+        var assignPayload = {
+          text: newText,
+          due_date: newDue,
+          subject: matchedTargetSubject ? matchedTargetSubject.name : (targetSubjectName || currentSubject.name),
+          subject_id: matchedTargetSubject ? matchedTargetSubject.id : currentSubject.id
+        };
+        if (fields.year) assignPayload.year = fields.year;
+        else if (matchedTargetSubject && matchedTargetSubject.year) assignPayload.year = matchedTargetSubject.year;
+
+        if (fields.semester) assignPayload.semester = fields.semester;
+        else if (matchedTargetSubject && matchedTargetSubject.semester) assignPayload.semester = matchedTargetSubject.semester;
+
+        if (assignId) {
+          await supabaseTable("assignments")
+            .update(assignPayload)
+            .eq("id", assignId)
+            .eq("user_id", user.id);
+        } else {
+          var allAssigns = await getAssignments().catch(function () { return []; });
+          var normPrevSubj = normalizeSubjectName(currentSubject.name);
+          var normPrevText = normalizeTaskText(prevTask.text);
+          var matchAssign = allAssigns.find(function (a) {
+            return (a.task_id && String(a.task_id) === String(taskId)) ||
+              ((normalizeSubjectName(a.subject) === normPrevSubj || (a.subject || "").trim().toLowerCase() === (currentSubject.name || "").trim().toLowerCase()) &&
+              normalizeTaskText(a.text) === normPrevText);
+          });
+
+          if (matchAssign) {
+            await supabaseTable("assignments")
+              .update(assignPayload)
+              .eq("id", matchAssign.id)
+              .eq("user_id", user.id);
+            assignId = matchAssign.id;
+          } else {
+            assignPayload.user_id = user.id;
+            assignPayload.completed = prevTask.completed || false;
+            assignPayload.task_id = taskId;
+            var created = await supabaseTable("assignments").insert(assignPayload).select().single();
+            if (created.data) assignId = created.data.id;
+          }
+
+          if (assignId) {
+            var finalSubjId = isMovingSubject ? matchedTargetSubject.id : currentSubject.id;
+            var refetch = await supabaseTable("subjects").select("tasks").eq("id", finalSubjId).eq("user_id", user.id).single();
+            if (refetch.data && Array.isArray(refetch.data.tasks)) {
+              var fTasks = refetch.data.tasks.slice();
+              var fT = fTasks.find(function (t) { return String(t.id) === String(taskId); });
+              if (fT) {
+                fT.assignment_id = assignId;
+                await supabaseTable("subjects").update({ tasks: fTasks }).eq("id", finalSubjId).eq("user_id", user.id);
+              }
+            }
+          }
+        }
+      } catch (assignSyncErr) {
+        console.warn("[ClassConnect] Warning: updateSubjectTask assignment sync failed:", assignSyncErr);
+      }
+
+      return true;
+    });
+  }
+
   async function toggleSubjectTask(subjectId, taskId) {
     return withAuthCheck(async function () {
       var user = getCurrentUser();
       var subj = await withTimeout(
         supabaseTable("subjects")
-          .select("tasks")
+          .select("*")
           .eq("id", subjectId)
           .eq("user_id", user.id)
           .single(),
@@ -1190,22 +1386,68 @@ function getRemoteSession() {
         "Subject fetch"
       );
       if (subj.error) throw subj.error;
-      var tasks = subj.data.tasks || [];
-      var task = tasks.find(function (t) { return t.id === taskId; });
-      if (task) {
-        task.completed = !task.completed;
-        var result = await withTimeout(
-          supabaseTable("subjects")
-            .update({ tasks: tasks })
-            .eq("id", subjectId)
-            .eq("user_id", user.id),
-          8000,
-          "Subject task toggle"
-        );
-        if (result.error) throw result.error;
-        return true;
+      var tasks = Array.isArray(subj.data.tasks) ? subj.data.tasks.slice() : [];
+      var task = tasks.find(function (t) { return String(t.id) === String(taskId); });
+      if (!task) return false;
+
+      task.completed = !task.completed;
+      var result = await withTimeout(
+        supabaseTable("subjects")
+          .update({ tasks: tasks })
+          .eq("id", subjectId)
+          .eq("user_id", user.id),
+        8000,
+        "Subject task toggle"
+      );
+      if (result.error) throw result.error;
+
+      // Synchronize with assignments table
+      try {
+        var normSubj = normalizeSubjectName(subj.data.name);
+        var normText = normalizeTaskText(task.text);
+
+        if (task.assignment_id) {
+          await supabaseTable("assignments")
+            .update({ completed: task.completed })
+            .eq("id", task.assignment_id)
+            .eq("user_id", user.id);
+        } else {
+          var allAssigns = await getAssignments().catch(function () { return []; });
+          var matchAssign = allAssigns.find(function (a) {
+            return (normalizeSubjectName(a.subject) === normSubj || (a.subject || "").trim().toLowerCase() === (subj.data.name || "").trim().toLowerCase()) &&
+              normalizeTaskText(a.text) === normText;
+          });
+          if (matchAssign) {
+            await supabaseTable("assignments")
+              .update({ completed: task.completed })
+              .eq("id", matchAssign.id)
+              .eq("user_id", user.id);
+            task.assignment_id = matchAssign.id;
+            await supabaseTable("subjects").update({ tasks: tasks }).eq("id", subjectId).eq("user_id", user.id);
+          } else {
+            var newAssignPayload = {
+              user_id: user.id,
+              text: task.text,
+              subject: subj.data.name,
+              due_date: task.due_date || "",
+              completed: task.completed,
+              year: subj.data.year || null,
+              semester: subj.data.semester || null,
+              subject_id: subjectId,
+              task_id: taskId
+            };
+            var insRes = await supabaseTable("assignments").insert(newAssignPayload).select().single();
+            if (insRes.data) {
+              task.assignment_id = insRes.data.id;
+              await supabaseTable("subjects").update({ tasks: tasks }).eq("id", subjectId).eq("user_id", user.id);
+            }
+          }
+        }
+      } catch (syncErr) {
+        console.warn("[ClassConnect] Warning: Assignment toggle sync failed:", syncErr);
       }
-      return false;
+
+      return true;
     });
   }
 
@@ -1214,7 +1456,7 @@ function getRemoteSession() {
       var user = getCurrentUser();
       var subj = await withTimeout(
         supabaseTable("subjects")
-          .select("tasks")
+          .select("*")
           .eq("id", subjectId)
           .eq("user_id", user.id)
           .single(),
@@ -1222,8 +1464,11 @@ function getRemoteSession() {
         "Subject fetch"
       );
       if (subj.error) throw subj.error;
-      var tasks = subj.data.tasks || [];
-      var newTasks = tasks.filter(function (t) { return t.id !== taskId; });
+      var tasks = Array.isArray(subj.data.tasks) ? subj.data.tasks.slice() : [];
+      var taskToDelete = tasks.find(function (t) { return String(t.id) === String(taskId); });
+      if (!taskToDelete) return true;
+
+      var newTasks = tasks.filter(function (t) { return String(t.id) !== String(taskId); });
       var result = await withTimeout(
         supabaseTable("subjects")
           .update({ tasks: newTasks })
@@ -1233,6 +1478,33 @@ function getRemoteSession() {
         "Subject task delete"
       );
       if (result.error) throw result.error;
+
+      // Synchronize deletion with assignments table
+      try {
+        if (taskToDelete.assignment_id) {
+          await supabaseTable("assignments")
+            .delete()
+            .eq("id", taskToDelete.assignment_id)
+            .eq("user_id", user.id);
+        } else {
+          var normSubj = normalizeSubjectName(subj.data.name);
+          var normText = normalizeTaskText(taskToDelete.text);
+          var allAssigns = await getAssignments().catch(function () { return []; });
+          var matchAssign = allAssigns.find(function (a) {
+            return (normalizeSubjectName(a.subject) === normSubj || (a.subject || "").trim().toLowerCase() === (subj.data.name || "").trim().toLowerCase()) &&
+              normalizeTaskText(a.text) === normText;
+          });
+          if (matchAssign) {
+            await supabaseTable("assignments")
+              .delete()
+              .eq("id", matchAssign.id)
+              .eq("user_id", user.id);
+          }
+        }
+      } catch (syncErr) {
+        console.warn("[ClassConnect] Warning: Assignment delete sync failed:", syncErr);
+      }
+
       return true;
     });
   }
@@ -1376,41 +1648,254 @@ function getRemoteSession() {
     });
   }
 
-  async function addAssignment(text, subject, dueDate) {
+  async function addAssignment(text, subject, dueDate, targetYear, targetSemester) {
     return withAuthCheck(async function () {
       var user = getCurrentUser();
-      var activeTerm = window.DeviceNotificationManager &&
-        typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function"
-        ? window.DeviceNotificationManager.getActiveAcademicTerm()
-        : { year: "", semester: "" };
+      var trimmedText = (text || "").trim();
+      var trimmedSubject = (subject || "").trim();
+      var cleanDue = dueDate ? String(dueDate).substring(0, 10) : "";
+
+      // Find matching subject to derive year/semester and prepare sync task
+      var subjects = await getSubjects().catch(function () { return []; });
+      var normSubj = normalizeSubjectName(trimmedSubject);
+      var matchedSubject = subjects.find(function (s) {
+        return normalizeSubjectName(s.name) === normSubj || (s.name || "").trim().toLowerCase() === trimmedSubject.toLowerCase();
+      });
+
+      var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
+        ? window.DeviceNotificationManager.getActiveAcademicTerm(subjects)
+        : { year: "1st Year", semester: "1st Semester" };
+
+      var yearVal = targetYear || (matchedSubject ? (matchedSubject.year || "1st Year") : (activeTerm.year || "1st Year"));
+      var semVal = targetSemester || (matchedSubject ? (matchedSubject.semester || "1st Semester") : (activeTerm.semester || "1st Semester"));
+      var taskId = cryptoId();
+
       var item = {
         user_id: user.id,
-        text: text.trim(),
-        subject: subject.trim(),
-        due_date: dueDate || "",
+        text: trimmedText,
+        subject: matchedSubject ? matchedSubject.name : trimmedSubject,
+        due_date: cleanDue,
         completed: false,
-        year: activeTerm.isConfigured ? activeTerm.year : null,
-        semester: activeTerm.isConfigured ? activeTerm.semester : null,
+        year: yearVal,
+        semester: semVal,
+        task_id: taskId,
+        subject_id: matchedSubject ? matchedSubject.id : null,
       };
+
       var payload = Object.assign({}, item);
       var result = await withTimeout(
         supabaseTable("assignments").insert(payload).select().single(),
         8000,
         "Assignment add"
       );
-      // Keep older Supabase schemas usable while the new term columns are
-      // added. Subject-linked legacy rows are still filtered safely below.
-      if (result.error && /Could not find the '([^']+)' column/i.test(result.error.message || "")) {
-        delete payload.year;
-        delete payload.semester;
-        result = await withTimeout(
-          supabaseTable("assignments").insert(payload).select().single(),
-          8000,
-          "Assignment add (legacy schema)"
-        );
+
+      // Handle older/unmigrated schemas missing newly introduced columns
+      while (result.error && /Could not find the '([^']+)' column/i.test(result.error.message || "")) {
+        var match = result.error.message.match(/Could not find the '([^']+)' column/i);
+        var missingCol = match ? match[1] : null;
+        if (missingCol && payload.hasOwnProperty(missingCol)) {
+          delete payload[missingCol];
+          result = await withTimeout(
+            supabaseTable("assignments").insert(payload).select().single(),
+            8000,
+            "Assignment add (schema fallback)"
+          );
+        } else {
+          break;
+        }
       }
       if (result.error) throw result.error;
-      return result.data;
+      var createdAssignment = result.data;
+
+      // SYNC TO SUBJECT TASKS: If matching subject exists, add task to subject.tasks.
+      // If matching subject does not exist, create the subject so the task is added under subjects!
+      try {
+        if (matchedSubject) {
+          var currentTasks = Array.isArray(matchedSubject.tasks) ? matchedSubject.tasks.slice() : [];
+          var normText = normalizeTaskText(trimmedText);
+          var existsInSubj = currentTasks.some(function (t) {
+            return (createdAssignment && t.assignment_id === createdAssignment.id) || normalizeTaskText(t.text) === normText;
+          });
+          if (!existsInSubj) {
+            var newTask = {
+              id: taskId,
+              text: trimmedText,
+              completed: false,
+              due_date: cleanDue,
+              assignment_id: createdAssignment ? createdAssignment.id : null
+            };
+            currentTasks.push(newTask);
+            await withTimeout(
+              supabaseTable("subjects")
+                .update({ tasks: currentTasks })
+                .eq("id", matchedSubject.id)
+                .eq("user_id", user.id),
+              8000,
+              "Subject tasks sync"
+            );
+          }
+        } else {
+          var newSubjTasks = [{
+            id: taskId,
+            text: trimmedText,
+            completed: false,
+            due_date: cleanDue,
+            assignment_id: createdAssignment ? createdAssignment.id : null
+          }];
+          var newSubjPayload = {
+            user_id: user.id,
+            name: trimmedSubject,
+            professor: "",
+            schedule: "",
+            year: yearVal || "1st Year",
+            semester: semVal || "1st Semester",
+            color: "#2563EB",
+            tasks: newSubjTasks
+          };
+          var insSubjRes = await supabaseTable("subjects").insert(newSubjPayload).select().single();
+          if (insSubjRes.data && createdAssignment) {
+            await supabaseTable("assignments").update({ subject_id: insSubjRes.data.id }).eq("id", createdAssignment.id).eq("user_id", user.id).catch(function () {});
+          }
+        }
+      } catch (syncErr) {
+        console.warn("[ClassConnect] Warning: Subject task sync failed:", syncErr);
+      }
+
+      return createdAssignment;
+    });
+  }
+
+  async function updateAssignment(id, fields) {
+    return withAuthCheck(async function () {
+      var user = getCurrentUser();
+      var currentRes = await withTimeout(
+        supabaseTable("assignments")
+          .select("*")
+          .eq("id", id)
+          .eq("user_id", user.id)
+          .single(),
+        8000,
+        "Assignment fetch for update"
+      );
+      if (currentRes.error) throw currentRes.error;
+      var prev = currentRes.data;
+
+      var newText = (fields.text !== undefined ? fields.text : prev.text).trim();
+      var newSubjectName = (fields.subject !== undefined ? fields.subject : prev.subject).trim();
+      var newDue = (fields.due_date !== undefined ? fields.due_date : (prev.due_date || "")).trim();
+      if (newDue.length > 10) newDue = newDue.substring(0, 10);
+
+      var allSubjects = await getSubjects().catch(function () { return []; });
+      var normNewSubj = normalizeSubjectName(newSubjectName);
+      var matchedNewSubject = allSubjects.find(function (s) {
+        return normalizeSubjectName(s.name) === normNewSubj || (s.name || "").trim().toLowerCase() === newSubjectName.toLowerCase();
+      });
+
+      var payload = {
+        text: newText,
+        subject: matchedNewSubject ? matchedNewSubject.name : newSubjectName,
+        due_date: newDue,
+        subject_id: matchedNewSubject ? matchedNewSubject.id : null,
+      };
+      if (matchedNewSubject && matchedNewSubject.year) payload.year = matchedNewSubject.year;
+      if (matchedNewSubject && matchedNewSubject.semester) payload.semester = matchedNewSubject.semester;
+
+      var updateRes = await withTimeout(
+        supabaseTable("assignments")
+          .update(payload)
+          .eq("id", id)
+          .eq("user_id", user.id)
+          .select()
+          .single(),
+        8000,
+        "Assignment update"
+      );
+
+      while (updateRes.error && /Could not find the '([^']+)' column/i.test(updateRes.error.message || "")) {
+        var match = updateRes.error.message.match(/Could not find the '([^']+)' column/i);
+        var missingCol = match ? match[1] : null;
+        if (missingCol && payload.hasOwnProperty(missingCol)) {
+          delete payload[missingCol];
+          updateRes = await withTimeout(
+            supabaseTable("assignments")
+              .update(payload)
+              .eq("id", id)
+              .eq("user_id", user.id)
+              .select()
+              .single(),
+            8000,
+            "Assignment update (schema fallback)"
+          );
+        } else {
+          break;
+        }
+      }
+      if (updateRes.error) throw updateRes.error;
+      var updatedAssignment = updateRes.data;
+
+      // SYNC TO SUBJECT TASKS
+      try {
+        var prevNormSubj = normalizeSubjectName(prev.subject);
+        var prevNormText = normalizeTaskText(prev.text);
+
+        for (var i = 0; i < allSubjects.length; i++) {
+          var subj = allSubjects[i];
+          var tasks = Array.isArray(subj.tasks) ? subj.tasks.slice() : [];
+          var changed = false;
+
+          var taskIndex = tasks.findIndex(function (t) {
+            return (t.assignment_id && String(t.assignment_id) === String(id)) ||
+              (normalizeSubjectName(subj.name) === prevNormSubj && normalizeTaskText(t.text) === prevNormText);
+          });
+
+          if (taskIndex !== -1) {
+            if (matchedNewSubject && matchedNewSubject.id !== subj.id) {
+              // Task reassigned to another subject -> remove from old subject
+              tasks.splice(taskIndex, 1);
+              changed = true;
+            } else {
+              // Update in same subject
+              tasks[taskIndex].text = newText;
+              tasks[taskIndex].due_date = newDue;
+              tasks[taskIndex].assignment_id = id;
+              changed = true;
+            }
+          }
+
+          if (changed) {
+            await withTimeout(
+              supabaseTable("subjects").update({ tasks: tasks }).eq("id", subj.id).eq("user_id", user.id),
+              8000,
+              "Subject task update sync"
+            );
+          }
+        }
+
+        // If reassigned to a different subject, add to the new subject
+        if (matchedNewSubject && (!prevNormSubj || normalizeSubjectName(matchedNewSubject.name) !== prevNormSubj)) {
+          var destSubjRes = await supabaseTable("subjects").select("tasks").eq("id", matchedNewSubject.id).eq("user_id", user.id).single();
+          if (!destSubjRes.error && destSubjRes.data) {
+            var destTasks = Array.isArray(destSubjRes.data.tasks) ? destSubjRes.data.tasks.slice() : [];
+            var alreadyThere = destTasks.some(function (t) {
+              return (t.assignment_id && String(t.assignment_id) === String(id)) || normalizeTaskText(t.text) === normalizeTaskText(newText);
+            });
+            if (!alreadyThere) {
+              destTasks.push({
+                id: cryptoId(),
+                text: newText,
+                completed: !!prev.completed,
+                due_date: newDue,
+                assignment_id: id
+              });
+              await supabaseTable("subjects").update({ tasks: destTasks }).eq("id", matchedNewSubject.id).eq("user_id", user.id);
+            }
+          }
+        }
+      } catch (syncErr) {
+        console.warn("[ClassConnect] Warning: Subject task update sync failed:", syncErr);
+      }
+
+      return updatedAssignment;
     });
   }
 
@@ -1419,7 +1904,7 @@ function getRemoteSession() {
       var user = getCurrentUser();
       var current = await withTimeout(
         supabaseTable("assignments")
-          .select("completed")
+          .select("*")
           .eq("id", id)
           .eq("user_id", user.id)
           .single(),
@@ -1427,7 +1912,9 @@ function getRemoteSession() {
         "Assignment fetch"
       );
       if (current.error) throw current.error;
-      var newCompleted = !current.data.completed;
+      var prev = current.data;
+      var newCompleted = !prev.completed;
+
       var result = await withTimeout(
         supabaseTable("assignments")
           .update({ completed: newCompleted })
@@ -1437,6 +1924,59 @@ function getRemoteSession() {
         "Assignment toggle"
       );
       if (result.error) throw result.error;
+
+      // SYNC TO SUBJECT TASKS: Find corresponding task across subjects and toggle it
+      try {
+        var allSubjects = await getSubjects().catch(function () { return []; });
+        var normSubj = normalizeSubjectName(prev.subject);
+        var normText = normalizeTaskText(prev.text);
+        var foundInSubj = false;
+
+        for (var i = 0; i < allSubjects.length; i++) {
+          var subj = allSubjects[i];
+          var tasks = Array.isArray(subj.tasks) ? subj.tasks.slice() : [];
+          var changed = false;
+
+          tasks.forEach(function (t) {
+            if ((t.assignment_id && String(t.assignment_id) === String(id)) ||
+                (prev.task_id && String(t.id) === String(prev.task_id)) ||
+                (normalizeSubjectName(subj.name) === normSubj && normalizeTaskText(t.text) === normText)) {
+              t.completed = newCompleted;
+              t.assignment_id = id;
+              changed = true;
+              foundInSubj = true;
+            }
+          });
+
+          if (changed) {
+            await withTimeout(
+              supabaseTable("subjects").update({ tasks: tasks }).eq("id", subj.id).eq("user_id", user.id),
+              8000,
+              "Subject task toggle sync"
+            );
+          }
+        }
+
+        if (!foundInSubj && prev.subject) {
+          var matchedS = allSubjects.find(function (s) {
+            return normalizeSubjectName(s.name) === normSubj || (s.name || "").trim().toLowerCase() === (prev.subject || "").trim().toLowerCase();
+          });
+          if (matchedS) {
+            var sTasks = Array.isArray(matchedS.tasks) ? matchedS.tasks.slice() : [];
+            sTasks.push({
+              id: prev.task_id || cryptoId(),
+              text: prev.text,
+              completed: newCompleted,
+              due_date: prev.due_date || "",
+              assignment_id: id
+            });
+            await supabaseTable("subjects").update({ tasks: sTasks }).eq("id", matchedS.id).eq("user_id", user.id);
+          }
+        }
+      } catch (syncErr) {
+        console.warn("[ClassConnect] Warning: Subject task toggle sync failed:", syncErr);
+      }
+
       return newCompleted;
     });
   }
@@ -1444,6 +1984,17 @@ function getRemoteSession() {
   async function deleteAssignment(id) {
     return withAuthCheck(async function () {
       var user = getCurrentUser();
+      var current = await withTimeout(
+        supabaseTable("assignments")
+          .select("*")
+          .eq("id", id)
+          .eq("user_id", user.id)
+          .single(),
+        8000,
+        "Assignment fetch for delete"
+      );
+      var prev = current.data || null;
+
       var result = await withTimeout(
         supabaseTable("assignments")
           .delete()
@@ -1453,8 +2004,159 @@ function getRemoteSession() {
         "Assignment delete"
       );
       if (result.error) throw result.error;
+
+      // SYNC TO SUBJECT TASKS: Remove task from subject
+      if (prev) {
+        try {
+          var allSubjects = await getSubjects().catch(function () { return []; });
+          var normSubj = normalizeSubjectName(prev.subject);
+          var normText = normalizeTaskText(prev.text);
+
+          for (var i = 0; i < allSubjects.length; i++) {
+            var subj = allSubjects[i];
+            var tasks = Array.isArray(subj.tasks) ? subj.tasks.slice() : [];
+            var initialLen = tasks.length;
+            tasks = tasks.filter(function (t) {
+              return !(
+                (t.assignment_id && String(t.assignment_id) === String(id)) ||
+                (prev.task_id && String(t.id) === String(prev.task_id)) ||
+                (normalizeSubjectName(subj.name) === normSubj && normalizeTaskText(t.text) === normText)
+              );
+            });
+            if (tasks.length !== initialLen) {
+              await withTimeout(
+                supabaseTable("subjects").update({ tasks: tasks }).eq("id", subj.id).eq("user_id", user.id),
+                8000,
+                "Subject task delete sync"
+              );
+            }
+          }
+        } catch (syncErr) {
+          console.warn("[ClassConnect] Warning: Subject task delete sync failed:", syncErr);
+        }
+      }
+
       return true;
     });
+  }
+
+  // ===== RECONCILE TASKS & ASSIGNMENTS =====
+  var _reconciliationInProgress = false;
+  async function reconcileTasksAndAssignments() {
+    if (_reconciliationInProgress || !isLoggedIn()) return;
+    _reconciliationInProgress = true;
+    try {
+      var user = getCurrentUser();
+      if (!user) return;
+      var results = await Promise.all([
+        getSubjects().catch(function () { return []; }),
+        getAssignments().catch(function () { return []; })
+      ]);
+      var subjects = results[0] || [];
+      var assignments = results[1] || [];
+
+      for (var s = 0; s < subjects.length; s++) {
+        var subj = subjects[s];
+        var tasks = Array.isArray(subj.tasks) ? subj.tasks.slice() : [];
+        var normSubj = normalizeSubjectName(subj.name);
+        var subjModified = false;
+
+        for (var t = 0; t < tasks.length; t++) {
+          var task = tasks[t];
+          var normText = normalizeTaskText(task.text);
+
+          var matchAssign = assignments.find(function (a) {
+            return (task.assignment_id && String(a.id) === String(task.assignment_id)) ||
+              (normalizeSubjectName(a.subject) === normSubj && normalizeTaskText(a.text) === normText);
+          });
+
+          if (matchAssign) {
+            if (task.completed !== matchAssign.completed) {
+              var finalCompleted = !!(task.completed || matchAssign.completed);
+              task.completed = finalCompleted;
+              subjModified = true;
+              await supabaseTable("assignments").update({ completed: finalCompleted }).eq("id", matchAssign.id).eq("user_id", user.id);
+            }
+            if (!task.assignment_id) {
+              task.assignment_id = matchAssign.id;
+              subjModified = true;
+            }
+            if (!task.due_date && matchAssign.due_date) {
+              task.due_date = matchAssign.due_date;
+              subjModified = true;
+            }
+          } else {
+            // Task in subject but missing from assignments table -> auto-create assignment
+            try {
+              var payload = {
+                user_id: user.id,
+                text: task.text,
+                subject: subj.name,
+                due_date: task.due_date || "",
+                completed: !!task.completed,
+                year: subj.year || null,
+                semester: subj.semester || null,
+                task_id: task.id,
+                subject_id: subj.id
+              };
+              var insRes = await supabaseTable("assignments").insert(payload).select().single();
+              while (insRes.error && /Could not find the '([^']+)' column/i.test(insRes.error.message || "")) {
+                var m = insRes.error.message.match(/Could not find the '([^']+)' column/i);
+                var col = m ? m[1] : null;
+                if (col && payload.hasOwnProperty(col)) {
+                  delete payload[col];
+                  insRes = await supabaseTable("assignments").insert(payload).select().single();
+                } else break;
+              }
+              if (!insRes.error && insRes.data) {
+                task.assignment_id = insRes.data.id;
+                assignments.push(insRes.data);
+                subjModified = true;
+              }
+            } catch (createErr) {
+              console.warn("[ClassConnect] Reconcile create assignment error:", createErr);
+            }
+          }
+        }
+
+        if (subjModified) {
+          await supabaseTable("subjects").update({ tasks: tasks }).eq("id", subj.id).eq("user_id", user.id);
+        }
+      }
+
+      // Check assignments and ensure tasks exist in target subjects
+      for (var a = 0; a < assignments.length; a++) {
+        var assign = assignments[a];
+        var normAssignSubj = normalizeSubjectName(assign.subject);
+        var normAssignText = normalizeTaskText(assign.text);
+
+        var targetSubj = subjects.find(function (s) {
+          return normalizeSubjectName(s.name) === normAssignSubj || (s.name || "").trim().toLowerCase() === (assign.subject || "").trim().toLowerCase();
+        });
+
+        if (targetSubj) {
+          var targetTasks = Array.isArray(targetSubj.tasks) ? targetSubj.tasks.slice() : [];
+          var existsInTarget = targetTasks.some(function (t) {
+            return (t.assignment_id && String(t.assignment_id) === String(assign.id)) || normalizeTaskText(t.text) === normAssignText;
+          });
+          if (!existsInTarget) {
+            targetTasks.push({
+              id: cryptoId(),
+              text: assign.text,
+              completed: !!assign.completed,
+              due_date: assign.due_date || "",
+              assignment_id: assign.id
+            });
+            targetSubj.tasks = targetTasks;
+            await supabaseTable("subjects").update({ tasks: targetTasks }).eq("id", targetSubj.id).eq("user_id", user.id);
+          }
+        }
+      }
+    } catch (reconcileErr) {
+      console.warn("[ClassConnect] Reconciliation warning:", reconcileErr);
+    } finally {
+      _reconciliationInProgress = false;
+    }
   }
 
   // ===== GRADES (with sync) =====
@@ -1981,8 +2683,14 @@ function getRemoteSession() {
       email: user.email.toLowerCase(),
       section: data.section ? normalizeSection(data.section) : getProfile().section,
     });
-    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
-    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
+    if (remoteProfile.year) {
+      localStorage.setItem("cc_active_year", remoteProfile.year);
+      if (user && user.id) localStorage.setItem("cc_active_year_" + user.id, remoteProfile.year);
+    }
+    if (remoteProfile.semester) {
+      localStorage.setItem("cc_active_semester", remoteProfile.semester);
+      if (user && user.id) localStorage.setItem("cc_active_semester_" + user.id, remoteProfile.semester);
+    }
     var saved = await upsertRemoteProfile(remoteProfile);
     if (saved && saved.name && remoteUser) remoteUser.name = saved.name;
     return saved;
@@ -2086,8 +2794,14 @@ function getRemoteSession() {
       throw response.error;
     }
     remoteProfile = remoteRowToProfile(response.data, user);
-    if (remoteProfile.year) localStorage.setItem("cc_active_year", remoteProfile.year);
-    if (remoteProfile.semester) localStorage.setItem("cc_active_semester", remoteProfile.semester);
+    if (remoteProfile.year) {
+      localStorage.setItem("cc_active_year", remoteProfile.year);
+      if (user && user.id) localStorage.setItem("cc_active_year_" + user.id, remoteProfile.year);
+    }
+    if (remoteProfile.semester) {
+      localStorage.setItem("cc_active_semester", remoteProfile.semester);
+      if (user && user.id) localStorage.setItem("cc_active_semester_" + user.id, remoteProfile.semester);
+    }
     return remoteProfile;
   }
 
@@ -3012,27 +3726,29 @@ function getRemoteSession() {
     // ===== ACADEMIC TERM RESOLUTION & SCHEDULE FILTERING =====
     function normalizeYearName(str) {
       if (!str) return "";
-      var s = str.trim();
+      var s = String(str).trim();
       if (/all/i.test(s)) return "All Years";
-      if (/^1(st)?/i.test(s)) return "1st Year";
-      if (/^2(nd)?/i.test(s)) return "2nd Year";
-      if (/^3(rd)?/i.test(s)) return "3rd Year";
-      if (/^4(th)?/i.test(s)) return "4th Year";
-      if (/^5(th)?/i.test(s)) return "5th Year";
-      if (/^\d+$/.test(s)) {
-        var suff = s === "1" ? "st" : s === "2" ? "nd" : s === "3" ? "rd" : "th";
-        return s + suff + " Year";
+      if (/^(1|1st|first|year\s*1)\b/i.test(s)) return "1st Year";
+      if (/^(2|2nd|second|year\s*2)\b/i.test(s)) return "2nd Year";
+      if (/^(3|3rd|third|year\s*3)\b/i.test(s)) return "3rd Year";
+      if (/^(4|4th|fourth|year\s*4)\b/i.test(s)) return "4th Year";
+      if (/^(5|5th|fifth|year\s*5)\b/i.test(s)) return "5th Year";
+      var numMatch = s.match(/\b([1-5])\b/);
+      if (numMatch) {
+        var n = numMatch[1];
+        var suff = n === "1" ? "st" : n === "2" ? "nd" : n === "3" ? "rd" : "th";
+        return n + suff + " Year";
       }
       return s;
     }
 
     function normalizeSemName(str) {
       if (!str) return "";
-      var s = str.trim();
+      var s = String(str).trim();
       if (/all/i.test(s)) return "All Semesters";
       if (/summer|midyear/i.test(s)) return "Summer / Midyear";
-      if (/1(st)?/i.test(s)) return "1st Semester";
-      if (/2(nd)?/i.test(s)) return "2nd Semester";
+      if (/(1|1st|first|sem\s*1)\b/i.test(s)) return "1st Semester";
+      if (/(2|2nd|second|sem\s*2)\b/i.test(s)) return "2nd Semester";
       return s;
     }
 
@@ -3044,14 +3760,16 @@ function getRemoteSession() {
       // change the term used by notifications.
       // The profile is the source of truth in Supabase. localStorage is only a
       // fast startup copy while the profile request is being restored.
-      var localYear = localStorage.getItem("cc_active_year") || "";
-      var localSem = localStorage.getItem("cc_active_semester") || "";
+      var scopedYearKey = user && user.id ? "cc_active_year_" + user.id : "cc_active_year";
+      var scopedSemKey = user && user.id ? "cc_active_semester_" + user.id : "cc_active_semester";
+      var localYear = localStorage.getItem(scopedYearKey) || localStorage.getItem("cc_active_year") || "";
+      var localSem = localStorage.getItem(scopedSemKey) || localStorage.getItem("cc_active_semester") || "";
 
       var profYear = (profile && profile.year) || (user && user.year) || (user && user.user_metadata && user.user_metadata.year) || "";
       var profSem = (profile && profile.semester) || (user && user.semester) || (user && user.user_metadata && user.user_metadata.semester) || "";
 
-      var chosenYear = localYear || profYear;
-      var chosenSem = localSem || profSem;
+      var chosenYear = profYear || localYear;
+      var chosenSem = profSem || localSem;
       chosenYear = normalizeYearName(chosenYear);
       chosenSem = normalizeSemName(chosenSem);
 
@@ -3085,22 +3803,24 @@ function getRemoteSession() {
     function filterSubjectsForActiveTerm(subjects, activeTerm) {
       if (!subjects || subjects.length === 0) return [];
       if (!activeTerm) return subjects;
-      if (activeTerm.isConfigured === false) return [];
+      if (activeTerm.isConfigured === false) return subjects;
 
       if (activeTerm.isAllYears && activeTerm.isAllSems) return subjects;
 
       var normYear = (!activeTerm.isAllYears && activeTerm.year && activeTerm.year !== "All Years")
-        ? (activeTerm.year || "").toLowerCase().replace(/[^0-9]/g, "")
+        ? normalizeYearName(activeTerm.year).toLowerCase()
         : "";
       var normSem = (!activeTerm.isAllSems && activeTerm.semester && activeTerm.semester !== "All Semesters")
-        ? (activeTerm.semester || "").toLowerCase().replace(/[^0-9a-z]/g, "")
+        ? normalizeSemName(activeTerm.semester).toLowerCase()
         : "";
 
       var filtered = subjects.filter(function (s) {
-        var sYear = normalizeYearName(s.year || "");
-        var sSem = normalizeSemName(s.semester || "");
-        var matchYear = !normYear || normalizeYearName(sYear).toLowerCase() === normalizeYearName(activeTerm.year).toLowerCase();
-        var matchSem = !normSem || normalizeSemName(sSem).toLowerCase() === normalizeSemName(activeTerm.semester).toLowerCase();
+        var sYear = s.year ? normalizeYearName(s.year).toLowerCase() : "";
+        var sSem = s.semester ? normalizeSemName(s.semester).toLowerCase() : "";
+
+        // If subject has no year or semester specified, include it (it belongs to the current student)
+        var matchYear = !normYear || !sYear || sYear === normYear;
+        var matchSem = !normSem || !sSem || sSem === normSem;
         return matchYear && matchSem;
       });
 
@@ -3136,13 +3856,14 @@ function getRemoteSession() {
 
     function parseDaysFromText(text) {
       if (!text) return [];
-      var raw = text.toUpperCase();
+      var raw = String(text).toUpperCase();
 
       // Clean obvious time stamps so letters in numbers don't conflict
       var cleaned = raw
-        .replace(/\b\d{1,2}(:\d{2})?\s*(AM|PM|NN)\b/g, "")
-        .replace(/\b\d{1,2}-\d{1,2}(AM|PM|NN)\b/g, "")
-        .replace(/\b(AM|PM|NN)\b/g, "");
+        .replace(/\b\d{1,2}(:\d{2})?\s*(AM|PM|NN)\b/gi, "")
+        .replace(/\b\d{1,2}-\d{1,2}(AM|PM|NN)\b/gi, "")
+        .replace(/\b(AM|PM|NN)\b/gi, "")
+        .replace(/\b\d{1,2}:\d{2}\b/g, "");
 
       var days = new Set();
       if (/DAILY|EVERYDAY/i.test(cleaned)) return [0, 1, 2, 3, 4, 5, 6];
@@ -3178,8 +3899,8 @@ function getRemoteSession() {
       if (/TUESDAY|\bTUES\b|\bTUE\b/i.test(cleaned)) days.add(2);
       if (/WEDNESDAY|\bWEDN\b|\bWED\b/i.test(cleaned)) days.add(3);
       if (/THURSDAY|\bTHURS\b|\bTHUR\b|\bTHU\b|\bTH\b/i.test(cleaned)) days.add(4);
-      if (/FRIDAY|\bFRI\b/i.test(cleaned)) days.add(5);
-      if (/SATURDAY|\bSAT\b/i.test(cleaned)) days.add(6);
+      if (/FRIDAY|\bFRI\b|\bFRIDAYS\b/i.test(cleaned)) days.add(5);
+      if (/SATURDAY|\bSAT\b|\bSATS\b/i.test(cleaned)) days.add(6);
 
       // Common schedule combinations
       if (/\bMWF\b/.test(cleaned) || cleaned.indexOf("M-W-F") !== -1 || cleaned.indexOf("M/W/F") !== -1) { days.add(1); days.add(3); days.add(5); }
@@ -3188,9 +3909,10 @@ function getRemoteSession() {
       if (/\bWTH\b/.test(cleaned) || cleaned.indexOf("W-TH") !== -1 || cleaned.indexOf("W/TH") !== -1) { days.add(3); days.add(4); }
       if (/\bFS\b/.test(cleaned)) { days.add(5); days.add(6); }
       if (/\bSS\b/.test(cleaned)) { days.add(6); days.add(0); }
+      if (/\bTF\b/.test(cleaned) || cleaned.indexOf("T-F") !== -1 || cleaned.indexOf("T/F") !== -1) { days.add(2); days.add(5); }
 
       // Short letter groupings like TWTH, MTWH
-      var tokens = cleaned.split(/[\s,\/|–—\-]+/);
+      var tokens = cleaned.split(/[\s,\/|–—\-+&;()]+/);
       tokens.forEach(function (token) {
         if (!token) return;
         if (/^[MTWHFSU]+$/.test(token) && token.length <= 7) {
@@ -3323,16 +4045,42 @@ function getRemoteSession() {
     }
 
     function filterManualScheduleForActiveTerm(manualSchedule, activeSubjects, activeTerm) {
-      if (!activeTerm || activeTerm.isConfigured === false) return [];
-      var allowedSubjects = {};
-      (activeSubjects || []).forEach(function (subject) {
-        if (subject.name) allowedSubjects[subject.name.trim().toLowerCase()] = true;
-      });
-      return (manualSchedule || []).filter(function (item) {
+      if (!manualSchedule || manualSchedule.length === 0) return [];
+      if (!activeTerm || activeTerm.isConfigured === false) return manualSchedule;
+
+      var normActiveYear = (!activeTerm.isAllYears && activeTerm.year && activeTerm.year !== "All Years")
+        ? normalizeYearName(activeTerm.year).toLowerCase()
+        : "";
+      var normActiveSem = (!activeTerm.isAllSems && activeTerm.semester && activeTerm.semester !== "All Semesters")
+        ? normalizeSemName(activeTerm.semester).toLowerCase()
+        : "";
+
+      var activeSubjectNames = (activeSubjects || []).map(function (s) {
+        return (s.name || "").trim().toLowerCase();
+      }).filter(Boolean);
+
+      return manualSchedule.filter(function (item) {
+        var itemYear = item.year ? normalizeYearName(item.year).toLowerCase() : "";
+        var itemSem = item.semester ? normalizeSemName(item.semester).toLowerCase() : "";
+
+        // If item explicitly belongs to another year/semester, exclude it
+        if (normActiveYear && itemYear && itemYear !== normActiveYear) return false;
+        if (normActiveSem && itemSem && itemSem !== normActiveSem) return false;
+
         var name = (item.subject || "").trim().toLowerCase();
-        // Manual rows predate year/semester columns, so their linked subject
-        // is the safe source of term ownership.
-        return !!name && !!allowedSubjects[name];
+        if (!name) return false;
+
+        // If subject is known in active subjects, definitely keep it
+        if (activeSubjectNames.length > 0) {
+          if (activeSubjectNames.indexOf(name) !== -1) return true;
+          for (var i = 0; i < activeSubjectNames.length; i++) {
+            var activeName = activeSubjectNames[i];
+            if (activeName.indexOf(name) !== -1 || name.indexOf(activeName) !== -1) return true;
+          }
+        }
+
+        // If item has matching year/sem or no conflicting year/sem, keep it
+        return true;
       });
     }
 
@@ -3357,8 +4105,15 @@ function getRemoteSession() {
         var subjects = filterSubjectsForActiveTerm(allSubjects, activeTerm);
         var activeManualSched = filterManualScheduleForActiveTerm(manualSched, subjects, activeTerm);
         var todayClasses = getTodayClasses(subjects, activeManualSched);
+        var allTodayClasses = getTodayClasses(allSubjects, manualSched);
+        if (todayClasses.length === 0 && allTodayClasses.length > 0) {
+          var activeNames = {};
+          subjects.forEach(function (s) { activeNames[(s.name || "").trim().toLowerCase()] = true; });
+          var hasActiveTermMatch = allTodayClasses.some(function (c) { return activeNames[(c.name || "").trim().toLowerCase()]; });
+          if (!hasActiveTermMatch) todayClasses = allTodayClasses;
+        }
 
-        var now = getPhilippineNowParts();
+        var now = getPhilippineNowParts;
         var dateKey = getPhilippineDateKey();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -3372,6 +4127,9 @@ function getRemoteSession() {
 
         if (prefs.scheduleDaily && todayClasses.length > 0) {
           var digestKey = "cc_notif_digest_" + dateKey + termKeySuffix + userSuffix;
+          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + termKeySuffix + userSuffix;
+          localStorage.removeItem(emptyDigestKey);
+
           if (!localStorage.getItem(digestKey)) {
             var classSummary = todayClasses.map(function (c) {
               return c.name + (c.scheduleText ? " (" + c.scheduleText + ")" : "") + (c.room ? " [Room " + c.room + "]" : "");
@@ -3802,6 +4560,8 @@ function getRemoteSession() {
         settingsYearSel.addEventListener("change", function () {
           var y = settingsYearSel.value;
           localStorage.setItem("cc_active_year", y);
+           var activeUserForTerm = getCurrentUser();
+           if (activeUserForTerm && activeUserForTerm.id) localStorage.setItem("cc_active_year_" + activeUserForTerm.id, y);
           updateScheduleActiveTermBadge();
           var schedYearBtns = document.querySelectorAll(".schedule-year-filter");
           schedYearBtns.forEach(function (b) {
@@ -3817,6 +4577,8 @@ function getRemoteSession() {
         settingsSemSel.addEventListener("change", function () {
           var s = settingsSemSel.value;
           localStorage.setItem("cc_active_semester", s);
+           var activeUserForTerm = getCurrentUser();
+           if (activeUserForTerm && activeUserForTerm.id) localStorage.setItem("cc_active_semester_" + activeUserForTerm.id, s);
           updateScheduleActiveTermBadge();
           var schedSemFilter = document.getElementById("schedule-semester-filter");
           if (schedSemFilter) {
@@ -4219,7 +4981,7 @@ function getRemoteSession() {
       feed.querySelectorAll(".btn-acknowledge").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var postId = btn.getAttribute("data-id");
-          withLoading(function () { return togglePostAcknowledgment(postId); }).then(function () {
+          withLoading(function () { return toggleAcknowledgePost(postId); }).then(function () {
             loadPosts(document.getElementById("dashboard-search-input") ? document.getElementById("dashboard-search-input").value : "");
           }).catch(function (err) {
             showToast(err.message || "Could not toggle acknowledgment.", "error");
@@ -4422,6 +5184,9 @@ function getRemoteSession() {
         if (tasks.length > 0) {
           tasksHtml += '<p class="subject-tasks-label"><i class="fas fa-list-check"></i> Tasks</p>';
           tasks.forEach(function (task) {
+            var taskDueHtml = task.due_date
+              ? '<span class="subject-task-due" title="Due Date"><i class="fas fa-calendar-day"></i> ' + escapeHtml(task.due_date.substring(0, 10)) + '</span>'
+              : "";
             tasksHtml +=
               '<div class="subject-task-item">' +
                 '<input type="checkbox" class="task-checkbox" ' +
@@ -4431,6 +5196,13 @@ function getRemoteSession() {
                 '<span class="task-text ' + (task.completed ? "completed" : "") + '">' +
                   escapeHtml(task.text) +
                 '</span>' +
+                taskDueHtml +
+                '<button class="btn-task-edit" ' +
+                  'data-subject-id="' + subject.id + '" ' +
+                  'data-task-id="' + task.id + '" ' +
+                  'title="Edit task & due date">' +
+                  '<i class="fas fa-pen"></i>' +
+                '</button>' +
                 '<button class="btn-task-delete" ' +
                   'data-subject-id="' + subject.id + '" ' +
                   'data-task-id="' + task.id + '" ' +
@@ -4488,9 +5260,38 @@ function getRemoteSession() {
       list.querySelectorAll(".task-checkbox").forEach(function (cb) {
         cb.addEventListener("change", function () {
           withLoading(function () { return toggleSubjectTask(cb.getAttribute("data-subject-id"), cb.getAttribute("data-task-id")); }).then(function () {
+            DeviceNotificationManager.onTaskCompleted();
+            DeviceNotificationManager.updateAppBadge();
             loadSubjects();
+            loadAssignments();
           }).catch(function (err) {
             showToast(err.message || "Could not update task.", "error");
+          });
+        });
+      });
+      list.querySelectorAll(".btn-task-edit").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var subjectId = btn.getAttribute("data-subject-id");
+          var taskId = btn.getAttribute("data-task-id");
+          getSubjects().then(function (subjects) {
+            var subject = subjects.find(function (s) { return String(s.id) === String(subjectId); });
+            if (!subject) return;
+            var tasks = Array.isArray(subject.tasks) ? subject.tasks : [];
+            var task = tasks.find(function (t) { return String(t.id) === String(taskId); });
+            if (!task) return;
+
+            document.getElementById("assignment-edit-id").value = task.assignment_id || "";
+            document.getElementById("assignment-text").value = task.text || "";
+            document.getElementById("assignment-due-date").value = task.due_date ? String(task.due_date).substring(0, 10) : "";
+            document.getElementById("assignment-modal-heading").textContent = "Edit Subject Task";
+            var submitBtn = document.getElementById("assignment-submit-btn");
+            if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-check"></i> Save Changes';
+
+            populateAssignmentSubjectsDropdown(subject.name).then(function () {
+              openModal("assignment-modal-overlay");
+            });
+          }).catch(function (err) {
+            showToast("Could not load task details.", "error");
           });
         });
       });
@@ -4498,7 +5299,9 @@ function getRemoteSession() {
         btn.addEventListener("click", function () {
           showConfirm("Delete this task?", function () {
             withLoading(function () { return deleteSubjectTask(btn.getAttribute("data-subject-id"), btn.getAttribute("data-task-id")); }).then(function () {
+              DeviceNotificationManager.updateAppBadge();
               loadSubjects();
+              loadAssignments();
               showToast("Task deleted.", "info");
             }).catch(function (err) {
               showToast(err.message || "Could not delete task.", "error");
@@ -4510,6 +5313,8 @@ function getRemoteSession() {
         btn.addEventListener("click", function () {
           document.getElementById("subject-task-subject-id").value = btn.getAttribute("data-subject-id");
           document.getElementById("subject-task-text").value = "";
+          var dueEl = document.getElementById("subject-task-due-date");
+          if (dueEl) dueEl.value = "";
           openModal("subject-task-modal-overlay");
         });
       });
@@ -4708,23 +5513,235 @@ function getRemoteSession() {
     });
   }
 
+  // ===== POPULATE ASSIGNMENT SUBJECTS DROPDOWN (FILTERED BY CURRENT TERM) =====
+  async function populateAssignmentSubjectsDropdown(preselectedSubjectName, targetYear, targetSemester) {
+    var selectEl = document.getElementById("assignment-subject");
+    var customWrap = document.getElementById("assignment-custom-subject-wrap");
+    var customInput = document.getElementById("assignment-subject-custom");
+    var termBadge = document.getElementById("assignment-subject-term-badge");
+    var modalYearSelect = document.getElementById("assignment-modal-year");
+    var modalSemSelect = document.getElementById("assignment-modal-semester");
+    if (!selectEl) return;
+
+    try {
+      var allSubjects = await getSubjects().catch(function () { return []; });
+
+      var currentYear = targetYear;
+      var currentSem = targetSemester;
+
+      if (!currentYear) {
+        if (modalYearSelect && modalYearSelect.value) {
+          currentYear = modalYearSelect.value;
+        } else {
+          var assignYearBtn = document.querySelector(".assignment-year-filter.active");
+          var assignFilterYear = assignYearBtn ? assignYearBtn.getAttribute("data-year") : "all";
+          var subjectYearBtn = document.querySelector(".subject-year-filter.active");
+          var filterYear = subjectYearBtn ? subjectYearBtn.getAttribute("data-year") : "all";
+
+          var chosenFilterYear = (assignFilterYear && assignFilterYear !== "all") ? assignFilterYear : ((filterYear && filterYear !== "all") ? filterYear : null);
+
+          var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
+            ? window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects)
+            : null;
+
+          var fallbackYear = (activeTerm && activeTerm.year && activeTerm.year !== "All Years")
+            ? activeTerm.year
+            : (localStorage.getItem("cc_active_year") || "1st Year");
+
+          currentYear = chosenFilterYear || fallbackYear;
+        }
+      }
+
+      if (!currentSem) {
+        if (modalSemSelect && modalSemSelect.value) {
+          currentSem = modalSemSelect.value;
+        } else {
+          var assignSemEl = document.getElementById("assignments-semester-filter");
+          var assignFilterSem = assignSemEl ? assignSemEl.value : "all";
+          var subjectSemEl = document.getElementById("subjects-semester-filter");
+          var filterSem = subjectSemEl ? subjectSemEl.value : "all";
+
+          var chosenFilterSem = (assignFilterSem && assignFilterSem !== "all") ? assignFilterSem : ((filterSem && filterSem !== "all") ? filterSem : null);
+
+          var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
+            ? window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects)
+            : null;
+
+          var fallbackSem = (activeTerm && activeTerm.semester && activeTerm.semester !== "All Semesters")
+            ? activeTerm.semester
+            : (localStorage.getItem("cc_active_semester") || "1st Semester");
+
+          currentSem = chosenFilterSem || fallbackSem;
+        }
+      }
+
+      if (modalYearSelect && currentYear) modalYearSelect.value = currentYear;
+      if (modalSemSelect && currentSem) modalSemSelect.value = currentSem;
+
+      if (termBadge) {
+        termBadge.textContent = currentYear + " \u2022 " + currentSem;
+      }
+
+      var normCurYear = normalizeYearName(currentYear);
+      var normCurSem = normalizeSemName(currentSem);
+
+      // Strictly display all subjects selected for the current year level and current semester
+      var currentTermSubjects = allSubjects.filter(function (s) {
+        var matchYear = normalizeYearName(s.year || "1st Year") === normCurYear;
+        var matchSem = normalizeSemName(s.semester || "1st Semester") === normCurSem;
+        return matchYear && matchSem;
+      });
+
+      selectEl.innerHTML = "";
+
+      var defaultOption = document.createElement("option");
+      defaultOption.value = "";
+      defaultOption.disabled = true;
+      defaultOption.selected = !preselectedSubjectName;
+      defaultOption.textContent = currentTermSubjects.length > 0
+        ? "Select a subject (" + currentYear + " \u2022 " + currentSem + ")..."
+        : "No subjects enrolled for " + currentYear + " \u2022 " + currentSem;
+      selectEl.appendChild(defaultOption);
+
+      var preselectedFound = false;
+
+      currentTermSubjects.forEach(function (s) {
+        var opt = document.createElement("option");
+        opt.value = s.name;
+        var profText = s.professor ? " (" + s.professor + ")" : "";
+        opt.textContent = s.name + profText;
+        opt.setAttribute("data-id", s.id);
+        if (preselectedSubjectName && (s.name.toLowerCase() === preselectedSubjectName.toLowerCase() || normalizeSubjectName(s.name) === normalizeSubjectName(preselectedSubjectName))) {
+          opt.selected = true;
+          preselectedFound = true;
+        }
+        selectEl.appendChild(opt);
+      });
+
+      var customOpt = document.createElement("option");
+      customOpt.value = "__custom__";
+      customOpt.textContent = "+ Enter custom subject...";
+      selectEl.appendChild(customOpt);
+
+      if (preselectedSubjectName && !preselectedFound) {
+        selectEl.value = "__custom__";
+        if (customWrap) customWrap.style.display = "block";
+        if (customInput) customInput.value = preselectedSubjectName;
+      } else if (currentTermSubjects.length === 0 && !preselectedSubjectName) {
+        selectEl.value = "__custom__";
+        if (customWrap) customWrap.style.display = "block";
+        if (customInput) customInput.value = "";
+      } else {
+        if (customWrap) customWrap.style.display = "none";
+        if (customInput) customInput.value = "";
+      }
+
+      // Re-populate dropdown when changing Year or Semester in the modal
+      if (modalYearSelect && !modalYearSelect._ccBound) {
+        modalYearSelect._ccBound = true;
+        modalYearSelect.addEventListener("change", function () {
+          var curSubVal = (selectEl && selectEl.value !== "__custom__") ? selectEl.value : null;
+          populateAssignmentSubjectsDropdown(curSubVal, modalYearSelect.value, modalSemSelect ? modalSemSelect.value : null);
+        });
+      }
+      if (modalSemSelect && !modalSemSelect._ccBound) {
+        modalSemSelect._ccBound = true;
+        modalSemSelect.addEventListener("change", function () {
+          var curSubVal = (selectEl && selectEl.value !== "__custom__") ? selectEl.value : null;
+          populateAssignmentSubjectsDropdown(curSubVal, modalYearSelect ? modalYearSelect.value : null, modalSemSelect.value);
+        });
+      }
+
+      if (!selectEl._ccBound) {
+        selectEl._ccBound = true;
+        selectEl.addEventListener("change", function () {
+          if (selectEl.value === "__custom__") {
+            if (customWrap) customWrap.style.display = "block";
+            if (customInput) customInput.focus();
+          } else {
+            if (customWrap) customWrap.style.display = "none";
+          }
+        });
+      }
+    } catch (err) {
+      console.error("[ClassConnect] Error populating assignment subjects:", err);
+    }
+  }
+
   // ===== ASSIGNMENTS LOAD =====
   async function loadAssignments() {
     const list = document.getElementById("assignments-list");
     if (!list) return;
     try {
-      var assignments = await getAssignments();
+      reconcileTasksAndAssignments().catch(function () {});
+      var results = await Promise.all([
+        getAssignments(),
+        getSubjects().catch(function () { return []; })
+      ]);
+      var assignments = results[0];
+      var allSubjects = results[1];
+
+      // Update active term badge in assignments header if present
+      var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
+        ? window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects)
+        : null;
+      var termBadge = document.getElementById("assignments-active-term-text");
+      if (termBadge && activeTerm) {
+        termBadge.textContent = activeTerm.year + " \u2022 " + activeTerm.semester;
+      }
+
+      // Wire up filter controls if present
+      var yearBtn = document.querySelector(".assignment-year-filter.active");
+      var filterYear = yearBtn ? yearBtn.getAttribute("data-year") : "all";
+      var semEl = document.getElementById("assignments-semester-filter");
+      var filterSem = semEl ? semEl.value : "all";
+
+      document.querySelectorAll(".assignment-year-filter").forEach(function (btn) {
+        if (!btn._ccBound) {
+          btn._ccBound = true;
+          btn.addEventListener("click", function () {
+            document.querySelectorAll(".assignment-year-filter").forEach(function (b) { b.classList.remove("active"); });
+            btn.classList.add("active");
+            loadAssignments();
+          });
+        }
+      });
+      if (semEl && !semEl._ccBound) {
+        semEl._ccBound = true;
+        semEl.addEventListener("change", function () {
+          loadAssignments();
+        });
+      }
+
+      var filtered = assignments.filter(function (item) {
+        var aYear = item.year || "";
+        var aSem = item.semester || "";
+        if (!aYear || !aSem) {
+          var matchedSubj = allSubjects.find(function (s) {
+            return (item.subject_id && String(s.id) === String(item.subject_id)) ||
+              normalizeSubjectName(s.name) === normalizeSubjectName(item.subject);
+          });
+          if (matchedSubj) {
+            if (!aYear) aYear = matchedSubj.year || "";
+            if (!aSem) aSem = matchedSubj.semester || "";
+          }
+        }
+        var matchY = (filterYear === "all" || !aYear || normalizeYearName(aYear) === normalizeYearName(filterYear));
+        var matchS = (filterSem === "all" || !aSem || normalizeSemName(aSem) === normalizeSemName(filterSem));
+        return matchY && matchS;
+      });
+
       list.innerHTML = "";
-      if (assignments.length === 0) {
+      if (filtered.length === 0) {
         list.innerHTML =
           '<div class="empty-state">' +
             '<div class="empty-icon"><i class="fas fa-clipboard-check"></i></div>' +
-            '<p class="empty-title">No assignments yet</p>' +
-            '<p class="empty-sub">Click "Add Task" to get started.</p>' +
+            '<p class="empty-title">No assignments found</p>' +
+            '<p class="empty-sub">Click "Add Task" to create a new assignment for this term.</p>' +
           '</div>';
         return;
       }
-      var sorted = assignments.slice().sort(function (a, b) {
+      var sorted = filtered.slice().sort(function (a, b) {
         if (a.completed !== b.completed) return a.completed ? 1 : -1;
         return 0;
       });
@@ -4752,9 +5769,14 @@ function getRemoteSession() {
             '<span class="assignment-text ' + (item.completed ? "completed" : "") + '">' + escapeHtml(item.text) + '</span>' +
             '<div class="assignment-meta">' + subjectHtml + dueHtml + '</div>' +
           '</div>' +
-          '<button class="btn-assignment-delete" data-id="' + item.id + '" title="Delete task">' +
-            '<i class="fas fa-trash"></i>' +
-          '</button>';
+          '<div class="assignment-actions">' +
+            '<button class="btn-assignment-edit" data-id="' + item.id + '" title="Edit assignment">' +
+              '<i class="fas fa-pen"></i>' +
+            '</button>' +
+            '<button class="btn-assignment-delete" data-id="' + item.id + '" title="Delete task">' +
+              '<i class="fas fa-trash"></i>' +
+            '</button>' +
+          '</div>';
         list.appendChild(div);
       });
 
@@ -4762,9 +5784,45 @@ function getRemoteSession() {
         cb.addEventListener("change", function () {
           withLoading(function () { return toggleAssignment(cb.getAttribute("data-id")); }).then(function () {
             DeviceNotificationManager.onTaskCompleted();
+            DeviceNotificationManager.updateAppBadge();
             loadAssignments();
+            loadSubjects();
           }).catch(function (err) {
             showToast(err.message || "Could not update task.", "error");
+          });
+        });
+      });
+      list.querySelectorAll(".btn-assignment-edit").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var id = btn.getAttribute("data-id");
+          var item = assignments.find(function (a) { return String(a.id) === String(id); });
+          if (!item) return;
+          document.getElementById("assignment-edit-id").value = item.id;
+          var taskIdInput = document.getElementById("assignment-task-id");
+          if (taskIdInput) taskIdInput.value = item.task_id || "";
+          var subjIdInput = document.getElementById("assignment-subject-id");
+          if (subjIdInput) subjIdInput.value = item.subject_id || "";
+          document.getElementById("assignment-text").value = item.text || "";
+          document.getElementById("assignment-due-date").value = item.due_date ? String(item.due_date).substring(0, 10) : "";
+          document.getElementById("assignment-modal-heading").textContent = "Edit Assignment";
+          var submitBtn = document.getElementById("assignment-submit-btn");
+          if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-check"></i> Save Changes';
+
+          var itemYear = item.year || null;
+          var itemSem = item.semester || null;
+          if (!itemYear || !itemSem) {
+            var matchedSub = allSubjects.find(function (s) {
+              return (item.subject_id && String(s.id) === String(item.subject_id)) ||
+                normalizeSubjectName(s.name) === normalizeSubjectName(item.subject);
+            });
+            if (matchedSub) {
+              itemYear = itemYear || matchedSub.year;
+              itemSem = itemSem || matchedSub.semester;
+            }
+          }
+
+          populateAssignmentSubjectsDropdown(item.subject, itemYear, itemSem).then(function () {
+            openModal("assignment-modal-overlay");
           });
         });
       });
@@ -4774,6 +5832,7 @@ function getRemoteSession() {
             withLoading(function () { return deleteAssignment(btn.getAttribute("data-id")); }).then(function () {
               DeviceNotificationManager.updateAppBadge();
               loadAssignments();
+              loadSubjects();
               showToast("Task deleted.", "info");
             }).catch(function (err) {
               showToast(err.message || "Could not delete task.", "error");
@@ -5261,11 +6320,24 @@ function getRemoteSession() {
                 '</div>' +
               '</div>' +
               '<div class="pdf-actions">' +
-                '<button class="btn-pdf-view" onclick="window.open(\'' + pdfData.data + '\',\'_blank\')"><i class="fas fa-eye"></i> View PDF</button>' +
-                '<button class="btn-pdf-export" id="export-pdf-btn"><i class="fas fa-download"></i> Export</button>' +
-                '<button class="btn-pdf-remove" id="remove-pdf-btn"><i class="fas fa-trash"></i> Remove</button>' +
+                '<button type="button" class="btn-pdf-view" id="view-curriculum-pdf-btn"><i class="fas fa-eye"></i> View PDF</button>' +
+                '<button type="button" class="btn-pdf-export" id="export-pdf-btn"><i class="fas fa-download"></i> Export</button>' +
+                '<button type="button" class="btn-pdf-remove" id="remove-pdf-btn"><i class="fas fa-trash"></i> Remove</button>' +
               '</div>' +
             '</div>';
+          var viewCurriculumPdfBtn = document.getElementById("view-curriculum-pdf-btn");
+          if (viewCurriculumPdfBtn) {
+            viewCurriculumPdfBtn.addEventListener("click", function () {
+              openFilePreviewModal({
+                id: "curriculum-pdf",
+                name: pdfData.name || "Curriculum Syllabus.pdf",
+                original_name: pdfData.name || "Curriculum Syllabus.pdf",
+                data: pdfData.data,
+                mime_type: "application/pdf",
+                category: "Curriculum Syllabus"
+              });
+            });
+          }
           var removeBtn = document.getElementById("remove-pdf-btn");
           if (removeBtn) {
             removeBtn.addEventListener("click", function () {
@@ -5340,11 +6412,24 @@ function getRemoteSession() {
                 '</div>' +
               '</div>' +
               '<div class="pdf-actions">' +
-                '<button class="btn-pdf-view" onclick="window.open(\'' + corData.data + '\',\'_blank\')"><i class="fas fa-eye"></i> View COR</button>' +
-                '<button class="btn-pdf-export" id="export-cor-btn"><i class="fas fa-download"></i> Export</button>' +
-                '<button class="btn-pdf-remove" id="remove-cor-btn"><i class="fas fa-trash"></i> Remove</button>' +
+                '<button type="button" class="btn-pdf-view" id="view-cor-pdf-btn"><i class="fas fa-eye"></i> View COR</button>' +
+                '<button type="button" class="btn-pdf-export" id="export-cor-btn"><i class="fas fa-download"></i> Export</button>' +
+                '<button type="button" class="btn-pdf-remove" id="remove-cor-btn"><i class="fas fa-trash"></i> Remove</button>' +
               '</div>' +
             '</div>';
+          var viewCorPdfBtn = document.getElementById("view-cor-pdf-btn");
+          if (viewCorPdfBtn) {
+            viewCorPdfBtn.addEventListener("click", function () {
+              openFilePreviewModal({
+                id: "cor-pdf",
+                name: corData.name || "Certificate of Registration.pdf",
+                original_name: corData.name || "Certificate of Registration.pdf",
+                data: corData.data,
+                mime_type: "application/pdf",
+                category: "Certificate of Registration (COR)"
+              });
+            });
+          }
           var removeCorBtn = document.getElementById("remove-cor-btn");
           if (removeCorBtn) {
             removeCorBtn.addEventListener("click", function () {
@@ -5918,6 +7003,42 @@ function getRemoteSession() {
     openModal("upload-file-modal-overlay");
   }
 
+  function base64ToUint8Array(base64) {
+    var raw = String(base64 || "");
+    var commaIndex = raw.indexOf(",");
+    if (commaIndex !== -1) {
+      var header = raw.slice(0, commaIndex);
+      raw = raw.slice(commaIndex + 1);
+      if (header.indexOf(";base64") === -1) raw = unescape(encodeURIComponent(decodeURIComponent(raw)));
+    }
+    raw = raw.replace(/\s/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    while (raw.length % 4) raw += "=";
+    var binaryString = atob(raw);
+    var len = binaryString.length;
+    var bytes = new Uint8Array(len);
+    for (var i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  function dataUriToBlob(dataUri) {
+    try {
+      var parts = dataUri.split(",");
+      var mimeMatch = parts[0].match(/:(.*?);/);
+      var mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+      var bstr = atob(parts[1]);
+      var n = bstr.length;
+      var u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      return new Blob([u8arr], { type: mime });
+    } catch (e) {
+      return null;
+    }
+  }
+
   function triggerFileDownload(file) {
     var fileSrc = file ? (file.data || file.file_url || file.url) : null;
     if (!fileSrc) {
@@ -5925,14 +7046,242 @@ function getRemoteSession() {
       return;
     }
     var filename = file.original_name || file.name || "school-file";
-    var a = document.createElement("a");
-    a.href = fileSrc;
-    a.download = filename;
-    a.target = "_blank";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    showToast("Downloading " + filename + "...", "success");
+    try {
+      var a = document.createElement("a");
+      if (fileSrc.indexOf("data:") === 0) {
+        var blob = dataUriToBlob(fileSrc);
+        if (blob) {
+          var blobUrl = URL.createObjectURL(blob);
+          a.href = blobUrl;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+          }, 1500);
+          showToast("Downloading " + filename + "...", "success");
+          return;
+        }
+      }
+      a.href = fileSrc;
+      a.download = filename;
+      a.target = "_blank";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast("Downloading " + filename + "...", "success");
+    } catch (e) {
+      console.error("[ClassConnect] Download error:", e);
+      window.open(fileSrc, "_blank");
+    }
+  }
+
+  function renderPdfFallback(file, fileSrc, errMessage) {
+    var sizeText = formatFileSize(file.size || (file.data ? Math.round(file.data.length * 0.75) : 0));
+    return '<div class="preview-generic-card">' +
+      '<div class="preview-generic-icon" style="background:#FEE2E2;color:#EF4444">' +
+        '<i class="fas fa-file-pdf"></i>' +
+      '</div>' +
+      '<h3>' + escapeHtml(file.name || "PDF Document") + '</h3>' +
+      '<p class="preview-generic-sub">' + escapeHtml(file.original_name || file.name) + ' (' + sizeText + ')</p>' +
+      (errMessage ? '<div class="preview-generic-notes">PDF preview note: ' + escapeHtml(errMessage) + '</div>' : '') +
+      '<div style="margin-top:16px;">' +
+        '<button type="button" class="btn-primary" onclick="triggerFileDownload(window._currentViewingFile)">' +
+          '<i class="fas fa-cloud-arrow-down"></i> Download & Open PDF' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderPdfInViewer(fileSrc, bodyEl, file) {
+    bodyEl.innerHTML =
+      '<div class="pdf-viewer-wrap">' +
+        '<div class="pdf-viewer-toolbar">' +
+          '<div class="pdf-toolbar-group">' +
+            '<button type="button" class="pdf-tool-btn" id="pdf-prev-btn" title="Previous Page" disabled><i class="fas fa-chevron-left"></i></button>' +
+            '<span class="pdf-page-indicator">' +
+              '<span id="pdf-current-page">1</span> / <span id="pdf-total-pages">--</span>' +
+            '</span>' +
+            '<button type="button" class="pdf-tool-btn" id="pdf-next-btn" title="Next Page" disabled><i class="fas fa-chevron-right"></i></button>' +
+          '</div>' +
+          '<div class="pdf-toolbar-group">' +
+            '<button type="button" class="pdf-tool-btn" id="pdf-zoom-out" title="Zoom Out"><i class="fas fa-magnifying-glass-minus"></i></button>' +
+            '<span class="pdf-zoom-level" id="pdf-zoom-level">Fit</span>' +
+            '<button type="button" class="pdf-tool-btn" id="pdf-zoom-in" title="Zoom In"><i class="fas fa-magnifying-glass-plus"></i></button>' +
+            '<button type="button" class="pdf-tool-btn" id="pdf-fit-width" title="Fit Width"><i class="fas fa-arrows-left-right"></i></button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="pdf-canvas-viewport" id="pdf-canvas-viewport">' +
+          '<div class="pdf-loading-state" id="pdf-loading-state">' +
+            '<i class="fas fa-circle-notch fa-spin"></i>' +
+            '<span>Rendering PDF document...</span>' +
+          '</div>' +
+          '<canvas id="pdf-render-canvas" class="pdf-render-canvas" style="display:none;"></canvas>' +
+        '</div>' +
+      '</div>';
+
+    if (!window.pdfjsLib) {
+      console.warn("[ClassConnect] pdfjsLib is not loaded, showing fallback");
+      bodyEl.innerHTML = renderPdfFallback(file, fileSrc, "PDF viewer library is initializing.");
+      return;
+    }
+
+    try {
+      if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdf.worker.min.js", document.baseURI).href;
+      }
+    } catch (workerErr) {}
+
+    var pdfData;
+    try {
+      var sourceText = typeof fileSrc === "string" ? fileSrc.trim() : "";
+      var isRawBase64 = sourceText && !/^https?:\/\//i.test(sourceText) && !/^blob:/i.test(sourceText) && /^[A-Za-z0-9+/_=-]+$/.test(sourceText) && sourceText.length > 100;
+      if (sourceText.indexOf("data:") === 0 || isRawBase64) pdfData = base64ToUint8Array(sourceText);
+      else if (sourceText) pdfData = sourceText;
+      else throw new Error("File data is unavailable.");
+    } catch (convErr) {
+      console.error("[ClassConnect] Failed to decode PDF base64:", convErr);
+      bodyEl.innerHTML = renderPdfFallback(file, fileSrc, "Could not decode file data.");
+      return;
+    }
+
+    var pdfDoc = null;
+    var currentPage = 1;
+    var totalPages = 1;
+    var currentScale = 1.0;
+    var isFitWidth = true;
+    var isRendering = false;
+    var pendingPage = null;
+
+    var prevBtn = document.getElementById("pdf-prev-btn");
+    var nextBtn = document.getElementById("pdf-next-btn");
+    var curPageEl = document.getElementById("pdf-current-page");
+    var totalPagesEl = document.getElementById("pdf-total-pages");
+    var zoomOutBtn = document.getElementById("pdf-zoom-out");
+    var zoomInBtn = document.getElementById("pdf-zoom-in");
+    var zoomLevelEl = document.getElementById("pdf-zoom-level");
+    var fitWidthBtn = document.getElementById("pdf-fit-width");
+    var viewportEl = document.getElementById("pdf-canvas-viewport");
+    var loadingState = document.getElementById("pdf-loading-state");
+    var canvas = document.getElementById("pdf-render-canvas");
+
+    function renderPage(num) {
+      if (!pdfDoc) return;
+      isRendering = true;
+
+      pdfDoc.getPage(num).then(function (page) {
+        var baseViewport = page.getViewport({ scale: 1.0 });
+        var targetScale = currentScale;
+
+        if (isFitWidth && viewportEl) {
+          var availWidth = Math.max(viewportEl.clientWidth - 28, 260);
+          targetScale = availWidth / baseViewport.width;
+          if (zoomLevelEl) zoomLevelEl.textContent = Math.round(targetScale * 100) + "%";
+        } else {
+          if (zoomLevelEl) zoomLevelEl.textContent = Math.round(currentScale * 100) + "%";
+        }
+
+        var viewport = page.getViewport({ scale: targetScale });
+        var dpr = window.devicePixelRatio || 1;
+
+        if (!canvas) return;
+        var ctx = canvas.getContext("2d");
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = Math.floor(viewport.width) + "px";
+        canvas.style.height = Math.floor(viewport.height) + "px";
+
+        var transform = dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null;
+        var renderContext = {
+          canvasContext: ctx,
+          viewport: viewport,
+          transform: transform
+        };
+
+        var renderTask = page.render(renderContext);
+        renderTask.promise.then(function () {
+          isRendering = false;
+          if (loadingState) loadingState.style.display = "none";
+          canvas.style.display = "block";
+          if (pendingPage !== null) {
+            var nextP = pendingPage;
+            pendingPage = null;
+            renderPage(nextP);
+          }
+        }).catch(function (rendErr) {
+          isRendering = false;
+          console.warn("[ClassConnect] PDF page render error:", rendErr);
+        });
+
+        if (curPageEl) curPageEl.textContent = num;
+        if (prevBtn) prevBtn.disabled = num <= 1;
+        if (nextBtn) nextBtn.disabled = num >= totalPages;
+      }).catch(function (err) {
+        isRendering = false;
+        console.error("[ClassConnect] Error loading PDF page:", err);
+      });
+    }
+
+    function queueRenderPage(num) {
+      if (isRendering) {
+        pendingPage = num;
+      } else {
+        renderPage(num);
+      }
+    }
+
+    if (prevBtn) {
+      prevBtn.addEventListener("click", function () {
+        if (currentPage <= 1) return;
+        currentPage--;
+        queueRenderPage(currentPage);
+      });
+    }
+
+    if (nextBtn) {
+      nextBtn.addEventListener("click", function () {
+        if (currentPage >= totalPages) return;
+        currentPage++;
+        queueRenderPage(currentPage);
+      });
+    }
+
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener("click", function () {
+        isFitWidth = false;
+        currentScale = Math.min(currentScale * 1.25, 3.0);
+        queueRenderPage(currentPage);
+      });
+    }
+
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener("click", function () {
+        isFitWidth = false;
+        currentScale = Math.max(currentScale / 1.25, 0.4);
+        queueRenderPage(currentPage);
+      });
+    }
+
+    if (fitWidthBtn) {
+      fitWidthBtn.addEventListener("click", function () {
+        isFitWidth = true;
+        queueRenderPage(currentPage);
+      });
+    }
+
+    // Load document
+    var docParam = (typeof pdfData === "string") ? { url: pdfData, disableWorker: true } : { data: pdfData, disableWorker: true, useWorkerFetch: false };
+    var loadingTask = window.pdfjsLib.getDocument(docParam);
+    loadingTask.promise.then(function (doc) {
+      pdfDoc = doc;
+      totalPages = doc.numPages;
+      if (totalPagesEl) totalPagesEl.textContent = totalPages;
+      renderPage(currentPage);
+    }).catch(function (err) {
+      console.error("[ClassConnect] PDF.js getDocument error:", err);
+      bodyEl.innerHTML = renderPdfFallback(file, fileSrc, err.message || "Failed to parse PDF document.");
+    });
   }
 
   function openFilePreviewModal(file) {
@@ -5948,6 +7297,7 @@ function getRemoteSession() {
     if (!overlay || !bodyEl) return;
 
     var fileSrc = file.data || file.file_url || file.url;
+    if (typeof fileSrc === "string") fileSrc = fileSrc.trim();
     var meta = getFileIconMeta(file.original_name || file.name, file.mime_type);
     if (titleEl) titleEl.textContent = file.name || file.original_name || "File Preview";
     var sizeText = formatFileSize(file.size || (file.data ? Math.round(file.data.length * 0.75) : 0));
@@ -5968,7 +7318,7 @@ function getRemoteSession() {
     if (meta.type === "image" && fileSrc) {
       bodyEl.innerHTML = '<div class="preview-img-container"><img src="' + fileSrc + '" alt="' + escapeHtml(file.name) + '" class="preview-full-img"></div>';
     } else if (meta.type === "pdf" && fileSrc) {
-      bodyEl.innerHTML = '<iframe src="' + fileSrc + '" class="preview-pdf-iframe" title="PDF Document"></iframe>';
+      renderPdfInViewer(fileSrc, bodyEl, file);
     } else if (meta.type === "text" && fileSrc && fileSrc.startsWith("data:text/")) {
       try {
         var base64Part = fileSrc.split(",")[1];
@@ -5992,7 +7342,7 @@ function getRemoteSession() {
       '<h3>' + escapeHtml(file.name) + '</h3>' +
       '<p class="preview-generic-sub">' + escapeHtml(file.original_name || file.name) + ' (' + sizeText + ')</p>' +
       (file.notes ? '<div class="preview-generic-notes"><strong>Remarks:</strong> ' + escapeHtml(file.notes) + '</div>' : '') +
-      '<div style="margin-top:20px;">' +
+      '<div style="margin-top:16px;">' +
         '<button type="button" class="btn-primary" onclick="triggerFileDownload(window._currentViewingFile)">' +
           '<i class="fas fa-cloud-arrow-down"></i> Download & Open File' +
         '</button>' +
@@ -7517,11 +8867,14 @@ function getRemoteSession() {
         e.preventDefault();
         var subjectId = document.getElementById("subject-task-subject-id").value;
         var text = (document.getElementById("subject-task-text").value || "").trim();
+        var dueEl = document.getElementById("subject-task-due-date");
+        var due = dueEl ? (dueEl.value || "") : "";
         if (!text) { showToast("Please enter a task description.", "warning"); return; }
-        withLoading(function () { return addSubjectTask(subjectId, text); }).then(function () {
+        withLoading(function () { return addSubjectTask(subjectId, text, due); }).then(function () {
           closeModal("subject-task-modal-overlay");
           subjectTaskForm.reset();
           loadSubjects();
+          loadAssignments();
           showToast("Task added.", "success");
         }).catch(function (err) {
           showToast(err.message || "Could not add task.", "error");
@@ -7597,10 +8950,21 @@ function getRemoteSession() {
 
     if (addAssignmentBtn) {
       addAssignmentBtn.addEventListener("click", function () {
+        var editIdEl = document.getElementById("assignment-edit-id");
+        if (editIdEl) editIdEl.value = "";
+        var taskIdEl = document.getElementById("assignment-task-id");
+        if (taskIdEl) taskIdEl.value = "";
+        var subjIdEl = document.getElementById("assignment-subject-id");
+        if (subjIdEl) subjIdEl.value = "";
         document.getElementById("assignment-text").value = "";
-        document.getElementById("assignment-subject").value = "";
         document.getElementById("assignment-due-date").value = "";
-        openModal("assignment-modal-overlay");
+        var headingEl = document.getElementById("assignment-modal-heading");
+        if (headingEl) headingEl.textContent = "Add Assignment";
+        var submitBtn = document.getElementById("assignment-submit-btn");
+        if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-plus"></i> Add Assignment';
+        populateAssignmentSubjectsDropdown().then(function () {
+          openModal("assignment-modal-overlay");
+        });
       });
     }
     if (closeAssignmentMdl) closeAssignmentMdl.addEventListener("click", function () { closeModal("assignment-modal-overlay"); });
@@ -7612,19 +8976,72 @@ function getRemoteSession() {
     if (assignmentForm) {
       assignmentForm.addEventListener("submit", function (e) {
         e.preventDefault();
+        var editIdEl = document.getElementById("assignment-edit-id");
+        var editId = editIdEl ? editIdEl.value : "";
+        var taskIdEl = document.getElementById("assignment-task-id");
+        var taskId = taskIdEl ? taskIdEl.value : "";
+        var subjectIdEl = document.getElementById("assignment-subject-id");
+        var subjectId = subjectIdEl ? subjectIdEl.value : "";
+
         var text = (document.getElementById("assignment-text").value || "").trim();
-        var subject = (document.getElementById("assignment-subject").value || "").trim();
-        var due = document.getElementById("assignment-due-date").value;
+        var selectSubject = document.getElementById("assignment-subject");
+        var subject = selectSubject ? (selectSubject.value || "").trim() : "";
+        if (subject === "__custom__") {
+          var customInput = document.getElementById("assignment-subject-custom");
+          subject = customInput ? (customInput.value || "").trim() : "";
+        }
+        var dueEl = document.getElementById("assignment-due-date");
+        var due = dueEl ? dueEl.value : "";
+        var yearEl = document.getElementById("assignment-modal-year");
+        var year = yearEl ? yearEl.value : "";
+        var semEl = document.getElementById("assignment-modal-semester");
+        var semester = semEl ? semEl.value : "";
+
         if (!text) { showToast("Please enter a task description.", "warning"); return; }
-        withLoading(function () { return addAssignment(text, subject, due); }).then(function () {
-          closeModal("assignment-modal-overlay");
-          assignmentForm.reset();
-          DeviceNotificationManager.onAssignmentAdded({ text: text, subject: subject, due_date: due });
-          loadAssignments();
-          showToast("Assignment added.", "success");
-        }).catch(function (err) {
-          showToast(err.message || "Could not add assignment.", "error");
-        });
+        if (!subject) { showToast("Please select or enter a subject.", "warning"); return; }
+
+        if (editId) {
+          withLoading(function () {
+            return updateAssignment(editId, { text: text, subject: subject, due_date: due, year: year, semester: semester });
+          }).then(function () {
+            closeModal("assignment-modal-overlay");
+            assignmentForm.reset();
+            DeviceNotificationManager.checkAssignmentNotifications();
+            DeviceNotificationManager.updateAppBadge();
+            loadAssignments();
+            loadSubjects();
+            showToast("Task updated.", "success");
+          }).catch(function (err) {
+            showToast(err.message || "Could not update task.", "error");
+          });
+        } else if (taskId && subjectId) {
+          withLoading(function () {
+            return updateSubjectTask(subjectId, taskId, { text: text, subject: subject, due_date: due, year: year, semester: semester });
+          }).then(function () {
+            closeModal("assignment-modal-overlay");
+            assignmentForm.reset();
+            DeviceNotificationManager.checkAssignmentNotifications();
+            DeviceNotificationManager.updateAppBadge();
+            loadAssignments();
+            loadSubjects();
+            showToast("Task updated.", "success");
+          }).catch(function (err) {
+            showToast(err.message || "Could not update task.", "error");
+          });
+        } else {
+          withLoading(function () {
+            return addAssignment(text, subject, due, year, semester);
+          }).then(function () {
+            closeModal("assignment-modal-overlay");
+            assignmentForm.reset();
+            DeviceNotificationManager.onAssignmentAdded({ text: text, subject: subject, due_date: due });
+            loadAssignments();
+            loadSubjects();
+            showToast("Assignment added.", "success");
+          }).catch(function (err) {
+            showToast(err.message || "Could not add assignment.", "error");
+          });
+        }
       });
     }
 
@@ -8308,8 +9725,8 @@ function getRemoteSession() {
   // IN-APP UPDATE & CACHE PURGE MANAGER
   // ==========================================
   var AppUpdateManager = (function () {
-    var CURRENT_VERSION = "1.0.0";
-    var CURRENT_BUILD = 1;
+    var CURRENT_VERSION = "1.1.0";
+    var CURRENT_BUILD = 3;
     var GITHUB_RAW_URL = "https://raw.githubusercontent.com/hdalmino0011/Class-Connect-Native/main/version.json";
     var SERVER_API_URL = "/api/app-version";
 
@@ -8519,7 +9936,7 @@ function getRemoteSession() {
 
           // If this update was already dismissed by the user in this version, do not pop up automatically on silent check
           var dismissedVer = localStorage.getItem("cc_dismissed_update_ver");
-           if (!remote.forceUpdate && (!silent || dismissedVer !== String(remote.version))) {
+           if (remote.forceUpdate || !silent || dismissedVer !== String(remote.version)) {
             showUpdateModal(remote);
           }
           return { available: true, updateInfo: remote };
