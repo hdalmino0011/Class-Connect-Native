@@ -527,20 +527,6 @@
           <i class="fas fa-plus"></i> Add Task
         </button>
       </div>
-      <div class="curriculum-filters assignments-filter-bar">
-        <button class="assignment-year-filter active" data-year="all">All Years</button>
-        <button class="assignment-year-filter" data-year="1st Year">1st Year</button>
-        <button class="assignment-year-filter" data-year="2nd Year">2nd Year</button>
-        <button class="assignment-year-filter" data-year="3rd Year">3rd Year</button>
-        <button class="assignment-year-filter" data-year="4th Year">4th Year</button>
-        <button class="assignment-year-filter" data-year="5th Year">5th Year</button>
-        <select id="assignments-semester-filter" class="curriculum-semester-filter" aria-label="Filter by Semester">
-          <option value="all">All Semesters</option>
-          <option value="1st Semester">1st Semester</option>
-          <option value="2nd Semester">2nd Semester</option>
-          <option value="Summer / Midyear">Summer / Midyear</option>
-        </select>
-      </div>
       <div id="assignments-list" class="assignments-list">
         <!-- assignments rendered by script.js -->
       </div>
@@ -1690,26 +1676,8 @@
         <label for="assignment-text">Task Description</label>
         <input type="text" id="assignment-text" placeholder="e.g. Submit Project Proposal" required>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label for="assignment-modal-year">Year Level</label>
-          <select id="assignment-modal-year">
-            <option value="1st Year">1st Year</option>
-            <option value="2nd Year">2nd Year</option>
-            <option value="3rd Year">3rd Year</option>
-            <option value="4th Year">4th Year</option>
-            <option value="5th Year">5th Year</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="assignment-modal-semester">Semester</label>
-          <select id="assignment-modal-semester">
-            <option value="1st Semester">1st Semester</option>
-            <option value="2nd Semester">2nd Semester</option>
-            <option value="Summer / Midyear">Summer / Midyear</option>
-          </select>
-        </div>
-      </div>
+      <input type="hidden" id="assignment-modal-year">
+      <input type="hidden" id="assignment-modal-semester">
       <div class="form-group">
         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px;">
           <label for="assignment-subject" style="margin-bottom: 0;">Subject</label>

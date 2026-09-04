@@ -3634,6 +3634,45 @@ function getRemoteSession() {
       return false;
     }
 
+    var _sentNotifRegistry = null;
+    function getSentNotifRegistry() {
+      if (_sentNotifRegistry) return _sentNotifRegistry;
+      try {
+        _sentNotifRegistry = JSON.parse(localStorage.getItem("cc_sent_notifications_registry") || "{}");
+      } catch (e) {
+        _sentNotifRegistry = {};
+      }
+      return _sentNotifRegistry;
+    }
+
+    function isNotificationAlreadySent(key) {
+      if (!key) return false;
+      var reg = getSentNotifRegistry();
+      var sentTime = reg[key];
+      if (!sentTime) return false;
+      if (Date.now() - sentTime > 48 * 60 * 60 * 1000) {
+        delete reg[key];
+        return false;
+      }
+      return true;
+    }
+
+    function markNotificationSent(key) {
+      if (!key) return;
+      var reg = getSentNotifRegistry();
+      reg[key] = Date.now();
+      try {
+        var nowMs = Date.now();
+        var keys = Object.keys(reg);
+        if (keys.length > 150) {
+          keys.forEach(function (k) {
+            if (nowMs - reg[k] > 48 * 60 * 60 * 1000) delete reg[k];
+          });
+        }
+        localStorage.setItem("cc_sent_notifications_registry", JSON.stringify(reg));
+      } catch (e) {}
+    }
+
     function sendNotification(title, body, type, options) {
       options = options || {};
       var prefs = getPrefs();
@@ -3642,6 +3681,13 @@ function getRemoteSession() {
       if (type === "schedule" && !prefs.scheduleDaily && !prefs.scheduleUpcoming) return;
       if (type === "assignment" && !prefs.assignments) return;
       if (type === "post" && !prefs.posts) return;
+
+      // Strict once-only notification check (unless user explicitly forces it)
+      var notifKey = options.tag || (type + ":" + title + ":" + body);
+      if (!options.force && isNotificationAlreadySent(notifKey)) {
+        return;
+      }
+      markNotificationSent(notifKey);
 
       addInAppNotification({
         id: "notif_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6),
@@ -3691,7 +3737,7 @@ function getRemoteSession() {
           body: body,
           icon: "logo.png",
           badge: "logo.png",
-          tag: options.tag || ("cc_" + type + "_" + Date.now()),
+          tag: notifKey,
           vibrate: prefs.vibration ? [150, 80, 150] : undefined,
           data: {
             view: options.view || "view-home",
@@ -3756,10 +3802,6 @@ function getRemoteSession() {
       var profile = (typeof getProfile === "function") ? getProfile() : {};
       var user = (typeof getCurrentUser === "function") ? getCurrentUser() : null;
 
-      // The schedule page filters are for browsing and must never silently
-      // change the term used by notifications.
-      // The profile is the source of truth in Supabase. localStorage is only a
-      // fast startup copy while the profile request is being restored.
       var scopedYearKey = user && user.id ? "cc_active_year_" + user.id : "cc_active_year";
       var scopedSemKey = user && user.id ? "cc_active_semester_" + user.id : "cc_active_semester";
       var localYear = localStorage.getItem(scopedYearKey) || localStorage.getItem("cc_active_year") || "";
@@ -3770,32 +3812,55 @@ function getRemoteSession() {
 
       var chosenYear = profYear || localYear;
       var chosenSem = profSem || localSem;
-      chosenYear = normalizeYearName(chosenYear);
-      chosenSem = normalizeSemName(chosenSem);
+
+      // Infer year from section if available (e.g. BSIT 3-A -> 3rd Year)
+      if (!chosenYear) {
+        var secStr = (profile && profile.section) || (user && user.section) || (user && user.user_metadata && user.user_metadata.section) || "";
+        if (/5/i.test(secStr) && /yr|year|5-[a-z]/i.test(secStr)) chosenYear = "5th Year";
+        else if (/4/i.test(secStr) && /yr|year|4-[a-z]|iv/i.test(secStr)) chosenYear = "4th Year";
+        else if (/3/i.test(secStr) && /yr|year|3-[a-z]|iii/i.test(secStr)) chosenYear = "3rd Year";
+        else if (/2/i.test(secStr) && /yr|year|2-[a-z]|ii/i.test(secStr)) chosenYear = "2nd Year";
+        else if (/1/i.test(secStr) && /yr|year|1-[a-z]|\bi\b/i.test(secStr)) chosenYear = "1st Year";
+      }
+
+      // Infer from subjects if available
+      if (!chosenYear && Array.isArray(subjects) && subjects.length > 0) {
+        var yMap = {};
+        subjects.forEach(function (s) {
+          if (s.year) {
+            var n = normalizeYearName(s.year);
+            if (n && n !== "All Years") yMap[n] = (yMap[n] || 0) + 1;
+          }
+        });
+        var bestY = Object.keys(yMap).sort(function (a, b) { return yMap[b] - yMap[a]; })[0];
+        if (bestY) chosenYear = bestY;
+      }
+
+      if (!chosenSem && Array.isArray(subjects) && subjects.length > 0) {
+        var sMap = {};
+        subjects.forEach(function (s) {
+          if (s.semester) {
+            var ns = normalizeSemName(s.semester);
+            if (ns && ns !== "All Semesters") sMap[ns] = (sMap[ns] || 0) + 1;
+          }
+        });
+        var bestS = Object.keys(sMap).sort(function (a, b) { return sMap[b] - sMap[a]; })[0];
+        if (bestS) chosenSem = bestS;
+      }
+
+      chosenYear = normalizeYearName(chosenYear) || "1st Year";
+      chosenSem = normalizeSemName(chosenSem) || "1st Semester";
 
       var isAllY = chosenYear === "All Years";
       var isAllS = chosenSem === "All Semesters";
-      var isConfigured = !!chosenYear && !!chosenSem && !isAllY && !isAllS;
-
-      var label = "";
-      if (!isConfigured) {
-        label = "Select your current year & semester";
-      } else if (isAllY && isAllS) {
-        label = "All Registered Subjects";
-      } else if (isAllY) {
-        label = chosenSem;
-      } else if (isAllS) {
-        label = chosenYear;
-      } else {
-        label = chosenYear + " \u2022 " + chosenSem;
-      }
+      var label = chosenYear + " \u2022 " + chosenSem;
 
       return {
-        year: chosenYear || "",
-        semester: chosenSem || "",
+        year: chosenYear,
+        semester: chosenSem,
         isAllYears: isAllY,
         isAllSems: isAllS,
-        isConfigured: isConfigured,
+        isConfigured: true,
         label: label
       };
     }
@@ -3803,7 +3868,6 @@ function getRemoteSession() {
     function filterSubjectsForActiveTerm(subjects, activeTerm) {
       if (!subjects || subjects.length === 0) return [];
       if (!activeTerm) return subjects;
-      if (activeTerm.isConfigured === false) return subjects;
 
       if (activeTerm.isAllYears && activeTerm.isAllSems) return subjects;
 
@@ -3818,11 +3882,24 @@ function getRemoteSession() {
         var sYear = s.year ? normalizeYearName(s.year).toLowerCase() : "";
         var sSem = s.semester ? normalizeSemName(s.semester).toLowerCase() : "";
 
-        // If subject has no year or semester specified, include it (it belongs to the current student)
         var matchYear = !normYear || !sYear || sYear === normYear;
         var matchSem = !normSem || !sSem || sSem === normSem;
         return matchYear && matchSem;
       });
+
+      // Fallback 1: match year if semester filter gave 0
+      if (filtered.length === 0 && normYear) {
+        var yearOnly = subjects.filter(function (s) {
+          var sYear = s.year ? normalizeYearName(s.year).toLowerCase() : "";
+          return !sYear || sYear === normYear;
+        });
+        if (yearOnly.length > 0) return yearOnly;
+      }
+
+      // Fallback 2: return all subjects so subjects are never blank
+      if (filtered.length === 0 && subjects.length > 0) {
+        return subjects;
+      }
 
       return filtered;
     }
@@ -3995,14 +4072,15 @@ function getRemoteSession() {
 
     function getTodayClasses(subjects, manualSchedule) {
       var now = getPhilippineNowParts();
-      var currentDay = now.dayIndex;
+      var phDay = now.dayIndex;
+      var localDay = new Date().getDay();
       var classes = [];
       var seenMap = {};
 
       (subjects || []).forEach(function (s) {
         if (!s.schedule) return;
         var days = parseDaysFromText(s.schedule);
-        if (days.indexOf(currentDay) !== -1) {
+        if (days.indexOf(phDay) !== -1 || days.indexOf(localDay) !== -1) {
           var startMin = parseStartTimeToMinutes(s.schedule);
           var key = (s.name || "").trim().toLowerCase();
           seenMap[key] = true;
@@ -4023,7 +4101,7 @@ function getRemoteSession() {
       (manualSchedule || []).forEach(function (m) {
         if (!m.day) return;
         var days = parseDaysFromText(m.day);
-        if (days.indexOf(currentDay) !== -1) {
+        if (days.indexOf(phDay) !== -1 || days.indexOf(localDay) !== -1) {
           var key = (m.subject || "").trim().toLowerCase();
           if (seenMap[key]) return; // Avoid duplicate if already pulled from subjects
           var startMin = m.start_time ? parseStartTimeToMinutes(m.start_time) : null;
@@ -4113,7 +4191,7 @@ function getRemoteSession() {
           if (!hasActiveTermMatch) todayClasses = allTodayClasses;
         }
 
-        var now = getPhilippineNowParts;
+        var now = getPhilippineNowParts();
         var dateKey = getPhilippineDateKey();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         var monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -4121,14 +4199,12 @@ function getRemoteSession() {
         var dateFormatted = dayName + ", " + monthNames[now.month - 1] + " " + now.day;
         var termLabel = activeTerm.label;
 
-        // 1. Daily Morning Digest (keyed by date and active term to allow term changes)
+        // 1. Daily Morning Digest: ONLY notify when there are classes scheduled for today!
         var userSuffix = (currentUser && currentUser.id) ? ("_" + currentUser.id) : "";
         var termKeySuffix = "_" + (activeTerm.year || "any").replace(/\s+/g, "_") + "_" + (activeTerm.semester || "any").replace(/\s+/g, "_");
 
         if (prefs.scheduleDaily && todayClasses.length > 0) {
           var digestKey = "cc_notif_digest_" + dateKey + termKeySuffix + userSuffix;
-          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + termKeySuffix + userSuffix;
-          localStorage.removeItem(emptyDigestKey);
 
           if (!localStorage.getItem(digestKey)) {
             var classSummary = todayClasses.map(function (c) {
@@ -4139,31 +4215,20 @@ function getRemoteSession() {
               "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
               "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today (" + dateFormatted + "): " + classSummary,
               "schedule",
-              { view: "view-schedule", tag: "cc_daily_digest" }
+              { view: "view-schedule", tag: digestKey }
             );
             localStorage.setItem(digestKey, "true");
-          }
-        } else if (prefs.scheduleDaily && todayClasses.length === 0) {
-          var emptyDigestKey = "cc_notif_empty_digest_" + dateKey + termKeySuffix + userSuffix;
-          if (!localStorage.getItem(emptyDigestKey)) {
-            sendNotification(
-              "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
-              "No classes scheduled for today (" + dateFormatted + ") under your " + termLabel + " subjects. Enjoy your free time!",
-              "schedule",
-              { view: "view-schedule", tag: "cc_daily_digest" }
-            );
-            localStorage.setItem(emptyDigestKey, "true");
           }
         }
 
         // 2. Upcoming Class Alert (within 30 minutes before start)
-        if (prefs.scheduleUpcoming) {
+        if (prefs.scheduleUpcoming && todayClasses.length > 0) {
           var currentMin = now.hour * 60 + now.minute;
           todayClasses.forEach(function (c) {
             if (c.startMin < 9999) {
               var diff = c.startMin - currentMin;
               if (diff >= 0 && diff <= 30) {
-                var upcomingKey = "cc_notif_up_" + c.name.replace(/\s+/g, "_") + "_" + dateKey + "_" + c.startMin;
+                var upcomingKey = "cc_notif_up_" + (c.id || c.name.replace(/\s+/g, "_")) + "_" + dateKey + "_" + c.startMin;
                 if (!localStorage.getItem(upcomingKey)) {
                   var timeDesc = diff === 0 ? "starting now" : "starting in " + diff + " minutes";
                   sendNotification(
@@ -4199,14 +4264,15 @@ function getRemoteSession() {
         var manualSched = results[1] || [];
 
         var activeTerm = getActiveAcademicTerm(allSubjects);
-        if (!activeTerm.isConfigured) {
-          updateScheduleActiveTermBadge(allSubjects);
-          showToast("Select your current year and semester before sending schedule alerts.", "warning");
-          return;
-        }
+        updateScheduleActiveTermBadge(allSubjects);
+
         var subjects = filterSubjectsForActiveTerm(allSubjects, activeTerm);
         var activeManualSched = filterManualScheduleForActiveTerm(manualSched, subjects, activeTerm);
         var todayClasses = getTodayClasses(subjects, activeManualSched);
+        var allTodayClasses = getTodayClasses(allSubjects, manualSched);
+        if (todayClasses.length === 0 && allTodayClasses.length > 0) {
+          todayClasses = allTodayClasses;
+        }
 
         var now = getPhilippineNowParts();
         var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -4215,7 +4281,6 @@ function getRemoteSession() {
         var dateFormatted = dayName + ", " + monthNames[now.month - 1] + " " + now.day;
         var termLabel = activeTerm.label;
 
-        updateScheduleActiveTermBadge(allSubjects);
         playChime();
         vibrate([150, 80, 150]);
 
@@ -4228,7 +4293,7 @@ function getRemoteSession() {
             "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
             "You have " + todayClasses.length + " class" + (todayClasses.length > 1 ? "es" : "") + " today (" + dateFormatted + "): " + summary,
             "schedule",
-            { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now() }
+            { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now(), force: true }
           );
           showToast("Blasted schedule alert for " + todayClasses.length + " classes (" + termLabel + ")!", "success");
         } else {
@@ -4236,7 +4301,7 @@ function getRemoteSession() {
             "Today's Schedule \u2014 " + dayName + " (" + termLabel + ")",
             "No classes scheduled for today (" + dateFormatted + ") under your " + termLabel + " subjects. Enjoy your free time!",
             "schedule",
-            { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now() }
+            { view: "view-schedule", tag: "cc_schedule_blast_" + Date.now(), force: true }
           );
           showToast("No classes scheduled today for " + termLabel + ". Notification blasted!", "info");
         }
@@ -4250,7 +4315,10 @@ function getRemoteSession() {
     }
 
     function filterAssignmentsForActiveTerm(assignments, activeTerm, subjects) {
-      if (!activeTerm || !activeTerm.isConfigured) return [];
+      if (!activeTerm) return assignments || [];
+      var normYear = activeTerm.year ? normalizeYearName(activeTerm.year) : "";
+      var normSem = activeTerm.semester ? normalizeSemName(activeTerm.semester) : "";
+
       var subjectTerms = {};
       (subjects || []).forEach(function (subject) {
         if (!subject.name) return;
@@ -4260,22 +4328,26 @@ function getRemoteSession() {
         };
       });
 
-      return (assignments || []).filter(function (assignment) {
+      var filtered = (assignments || []).filter(function (assignment) {
         var explicitYear = assignment.year || assignment.year_level || "";
         var explicitSemester = assignment.semester || "";
         if (explicitYear || explicitSemester) {
-          return normalizeYearName(explicitYear) === normalizeYearName(activeTerm.year) &&
-            normalizeSemName(explicitSemester) === normalizeSemName(activeTerm.semester);
+          var matchY = !normYear || !explicitYear || normalizeYearName(explicitYear) === normYear;
+          var matchS = !normSem || !explicitSemester || normalizeSemName(explicitSemester) === normSem;
+          return matchY && matchS;
         }
 
         var linked = subjectTerms[(assignment.subject || "").trim().toLowerCase()];
-        // Legacy assignments without term columns are only eligible when the
-        // subject they reference is in the selected term. Unknown/general
-        // assignments are intentionally not notified to avoid false alerts.
-        return !!linked &&
-          linked.year === normalizeYearName(activeTerm.year) &&
-          linked.semester === normalizeSemName(activeTerm.semester);
+        if (linked) {
+          var matchLY = !normYear || !linked.year || linked.year === normYear;
+          var matchLS = !normSem || !linked.semester || linked.semester === normSem;
+          return matchLY && matchLS;
+        }
+
+        return true;
       });
+
+      return filtered.length > 0 ? filtered : (assignments || []);
     }
 
     async function checkAssignmentNotifications() {
@@ -4310,7 +4382,7 @@ function getRemoteSession() {
               localStorage.setItem(keyToday, "true");
             }
           } else if (dueStr === tmrwKey) {
-            var keyTmrw = "cc_notif_due_tmrw_" + a.id + "_" + todayKey;
+            var keyTmrw = "cc_notif_due_tmrw_" + a.id + "_" + tmrwKey;
             if (!localStorage.getItem(keyTmrw)) {
               sendNotification(
                 "Assignment Due Tomorrow: " + a.text,
@@ -4321,15 +4393,20 @@ function getRemoteSession() {
               localStorage.setItem(keyTmrw, "true");
             }
           } else if (dueStr < todayKey) {
-            var keyOverdue = "cc_notif_overdue_" + a.id + "_" + todayKey;
-            if (!localStorage.getItem(keyOverdue)) {
-              sendNotification(
-                "Overdue Task: " + a.text,
-                "Subject: " + (a.subject || "General") + " was due on " + a.due_date + ". Tap to view task.",
-                "assignment",
-                { view: "view-assignments", tag: keyOverdue }
-              );
-              localStorage.setItem(keyOverdue, "true");
+            var dueTime = new Date(dueStr + "T00:00:00").getTime();
+            var nowTime = new Date(todayKey + "T00:00:00").getTime();
+            var daysOverdue = Math.floor((nowTime - dueTime) / (1000 * 60 * 60 * 24));
+            if (daysOverdue >= 1 && daysOverdue <= 3) {
+              var keyOverdue = "cc_notif_overdue_" + a.id;
+              if (!localStorage.getItem(keyOverdue)) {
+                sendNotification(
+                  "Overdue Task: " + a.text,
+                  "Subject: " + (a.subject || "General") + " was due on " + a.due_date + ". Tap to view task.",
+                  "assignment",
+                  { view: "view-assignments", tag: keyOverdue }
+                );
+                localStorage.setItem(keyOverdue, "true");
+              }
             }
           }
         });
@@ -5135,8 +5212,10 @@ function getRemoteSession() {
       var subjectSemEl = document.getElementById("subjects-semester-filter");
       var subjectFilterSem = subjectSemEl ? subjectSemEl.value : "all";
       var subjects = allSubjects.filter(function (s) {
-        var yMatch = (subjectFilterYear === "all" || (s.year || "1st Year") === subjectFilterYear);
-        var sMatch = (subjectFilterSem === "all" || (s.semester || "1st Semester") === subjectFilterSem);
+        var sYearNorm = normalizeYearName(s.year || "1st Year");
+        var sSemNorm = normalizeSemName(s.semester || "1st Semester");
+        var yMatch = (subjectFilterYear === "all" || sYearNorm === normalizeYearName(subjectFilterYear));
+        var sMatch = (subjectFilterSem === "all" || sSemNorm === normalizeSemName(subjectFilterSem));
         return yMatch && sMatch;
       });
 
@@ -5197,12 +5276,6 @@ function getRemoteSession() {
                   escapeHtml(task.text) +
                 '</span>' +
                 taskDueHtml +
-                '<button class="btn-task-edit" ' +
-                  'data-subject-id="' + subject.id + '" ' +
-                  'data-task-id="' + task.id + '" ' +
-                  'title="Edit task & due date">' +
-                  '<i class="fas fa-pen"></i>' +
-                '</button>' +
                 '<button class="btn-task-delete" ' +
                   'data-subject-id="' + subject.id + '" ' +
                   'data-task-id="' + task.id + '" ' +
@@ -5266,32 +5339,6 @@ function getRemoteSession() {
             loadAssignments();
           }).catch(function (err) {
             showToast(err.message || "Could not update task.", "error");
-          });
-        });
-      });
-      list.querySelectorAll(".btn-task-edit").forEach(function (btn) {
-        btn.addEventListener("click", function () {
-          var subjectId = btn.getAttribute("data-subject-id");
-          var taskId = btn.getAttribute("data-task-id");
-          getSubjects().then(function (subjects) {
-            var subject = subjects.find(function (s) { return String(s.id) === String(subjectId); });
-            if (!subject) return;
-            var tasks = Array.isArray(subject.tasks) ? subject.tasks : [];
-            var task = tasks.find(function (t) { return String(t.id) === String(taskId); });
-            if (!task) return;
-
-            document.getElementById("assignment-edit-id").value = task.assignment_id || "";
-            document.getElementById("assignment-text").value = task.text || "";
-            document.getElementById("assignment-due-date").value = task.due_date ? String(task.due_date).substring(0, 10) : "";
-            document.getElementById("assignment-modal-heading").textContent = "Edit Subject Task";
-            var submitBtn = document.getElementById("assignment-submit-btn");
-            if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-check"></i> Save Changes';
-
-            populateAssignmentSubjectsDropdown(subject.name).then(function () {
-              openModal("assignment-modal-overlay");
-            });
-          }).catch(function (err) {
-            showToast("Could not load task details.", "error");
           });
         });
       });
@@ -5526,57 +5573,18 @@ function getRemoteSession() {
     try {
       var allSubjects = await getSubjects().catch(function () { return []; });
 
-      var currentYear = targetYear;
-      var currentSem = targetSemester;
+      var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
+        ? window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects)
+        : null;
 
-      if (!currentYear) {
-        if (modalYearSelect && modalYearSelect.value) {
-          currentYear = modalYearSelect.value;
-        } else {
-          var assignYearBtn = document.querySelector(".assignment-year-filter.active");
-          var assignFilterYear = assignYearBtn ? assignYearBtn.getAttribute("data-year") : "all";
-          var subjectYearBtn = document.querySelector(".subject-year-filter.active");
-          var filterYear = subjectYearBtn ? subjectYearBtn.getAttribute("data-year") : "all";
+      var currentYear = targetYear || (activeTerm && activeTerm.year) || localStorage.getItem("cc_active_year") || "1st Year";
+      var currentSem = targetSemester || (activeTerm && activeTerm.semester) || localStorage.getItem("cc_active_semester") || "1st Semester";
 
-          var chosenFilterYear = (assignFilterYear && assignFilterYear !== "all") ? assignFilterYear : ((filterYear && filterYear !== "all") ? filterYear : null);
+      currentYear = normalizeYearName(currentYear);
+      currentSem = normalizeSemName(currentSem);
 
-          var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
-            ? window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects)
-            : null;
-
-          var fallbackYear = (activeTerm && activeTerm.year && activeTerm.year !== "All Years")
-            ? activeTerm.year
-            : (localStorage.getItem("cc_active_year") || "1st Year");
-
-          currentYear = chosenFilterYear || fallbackYear;
-        }
-      }
-
-      if (!currentSem) {
-        if (modalSemSelect && modalSemSelect.value) {
-          currentSem = modalSemSelect.value;
-        } else {
-          var assignSemEl = document.getElementById("assignments-semester-filter");
-          var assignFilterSem = assignSemEl ? assignSemEl.value : "all";
-          var subjectSemEl = document.getElementById("subjects-semester-filter");
-          var filterSem = subjectSemEl ? subjectSemEl.value : "all";
-
-          var chosenFilterSem = (assignFilterSem && assignFilterSem !== "all") ? assignFilterSem : ((filterSem && filterSem !== "all") ? filterSem : null);
-
-          var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
-            ? window.DeviceNotificationManager.getActiveAcademicTerm(allSubjects)
-            : null;
-
-          var fallbackSem = (activeTerm && activeTerm.semester && activeTerm.semester !== "All Semesters")
-            ? activeTerm.semester
-            : (localStorage.getItem("cc_active_semester") || "1st Semester");
-
-          currentSem = chosenFilterSem || fallbackSem;
-        }
-      }
-
-      if (modalYearSelect && currentYear) modalYearSelect.value = currentYear;
-      if (modalSemSelect && currentSem) modalSemSelect.value = currentSem;
+      if (modalYearSelect) modalYearSelect.value = currentYear;
+      if (modalSemSelect) modalSemSelect.value = currentSem;
 
       if (termBadge) {
         termBadge.textContent = currentYear + " \u2022 " + currentSem;
@@ -5585,12 +5593,27 @@ function getRemoteSession() {
       var normCurYear = normalizeYearName(currentYear);
       var normCurSem = normalizeSemName(currentSem);
 
-      // Strictly display all subjects selected for the current year level and current semester
-      var currentTermSubjects = allSubjects.filter(function (s) {
-        var matchYear = normalizeYearName(s.year || "1st Year") === normCurYear;
-        var matchSem = normalizeSemName(s.semester || "1st Semester") === normCurSem;
-        return matchYear && matchSem;
+      // 1. Matches for both year and semester
+      var termSubjects = allSubjects.filter(function (s) {
+        var sYear = s.year ? normalizeYearName(s.year) : "";
+        var sSem = s.semester ? normalizeSemName(s.semester) : "";
+        var yMatch = !normCurYear || !sYear || sYear === normCurYear || normCurYear === "All Years";
+        var sMatch = !normCurSem || !sSem || sSem === normCurSem || normCurSem === "All Semesters";
+        return yMatch && sMatch;
       });
+
+      // 2. If nothing matched both, try matching year only
+      if (termSubjects.length === 0 && normCurYear && normCurYear !== "All Years") {
+        termSubjects = allSubjects.filter(function (s) {
+          var sYear = s.year ? normalizeYearName(s.year) : "";
+          return !sYear || sYear === normCurYear;
+        });
+      }
+
+      // 3. If still 0, include all subjects so the user is never blocked or left with an empty dropdown!
+      if (termSubjects.length === 0) {
+        termSubjects = allSubjects.slice();
+      }
 
       selectEl.innerHTML = "";
 
@@ -5598,14 +5621,14 @@ function getRemoteSession() {
       defaultOption.value = "";
       defaultOption.disabled = true;
       defaultOption.selected = !preselectedSubjectName;
-      defaultOption.textContent = currentTermSubjects.length > 0
+      defaultOption.textContent = termSubjects.length > 0
         ? "Select a subject (" + currentYear + " \u2022 " + currentSem + ")..."
-        : "No subjects enrolled for " + currentYear + " \u2022 " + currentSem;
+        : "Select or enter a subject...";
       selectEl.appendChild(defaultOption);
 
       var preselectedFound = false;
 
-      currentTermSubjects.forEach(function (s) {
+      termSubjects.forEach(function (s) {
         var opt = document.createElement("option");
         opt.value = s.name;
         var profText = s.professor ? " (" + s.professor + ")" : "";
@@ -5618,6 +5641,28 @@ function getRemoteSession() {
         selectEl.appendChild(opt);
       });
 
+      // If there are other subjects in allSubjects that didn't match current term, also add them in an optgroup
+      var otherSubjects = allSubjects.filter(function (s) {
+        return !termSubjects.some(function (ts) { return ts.id === s.id; });
+      });
+      if (otherSubjects.length > 0) {
+        var group = document.createElement("optgroup");
+        group.label = "Other Subjects";
+        otherSubjects.forEach(function (s) {
+          var opt = document.createElement("option");
+          opt.value = s.name;
+          var termNote = (s.year ? s.year : "") + (s.semester ? " - " + s.semester : "");
+          opt.textContent = s.name + (termNote ? " (" + termNote + ")" : "");
+          opt.setAttribute("data-id", s.id);
+          if (preselectedSubjectName && !preselectedFound && (s.name.toLowerCase() === preselectedSubjectName.toLowerCase() || normalizeSubjectName(s.name) === normalizeSubjectName(preselectedSubjectName))) {
+            opt.selected = true;
+            preselectedFound = true;
+          }
+          group.appendChild(opt);
+        });
+        selectEl.appendChild(group);
+      }
+
       var customOpt = document.createElement("option");
       customOpt.value = "__custom__";
       customOpt.textContent = "+ Enter custom subject...";
@@ -5627,13 +5672,15 @@ function getRemoteSession() {
         selectEl.value = "__custom__";
         if (customWrap) customWrap.style.display = "block";
         if (customInput) customInput.value = preselectedSubjectName;
-      } else if (currentTermSubjects.length === 0 && !preselectedSubjectName) {
-        selectEl.value = "__custom__";
-        if (customWrap) customWrap.style.display = "block";
+      } else if (preselectedFound) {
+        if (customWrap) customWrap.style.display = "none";
         if (customInput) customInput.value = "";
       } else {
         if (customWrap) customWrap.style.display = "none";
         if (customInput) customInput.value = "";
+        if (termSubjects.length > 0) {
+          selectEl.selectedIndex = 1;
+        }
       }
 
       // Re-populate dropdown when changing Year or Semester in the modal
@@ -5678,8 +5725,8 @@ function getRemoteSession() {
         getAssignments(),
         getSubjects().catch(function () { return []; })
       ]);
-      var assignments = results[0];
-      var allSubjects = results[1];
+      var assignments = results[0] || [];
+      var allSubjects = results[1] || [];
 
       // Update active term badge in assignments header if present
       var activeTerm = (window.DeviceNotificationManager && typeof window.DeviceNotificationManager.getActiveAcademicTerm === "function")
@@ -5690,31 +5737,11 @@ function getRemoteSession() {
         termBadge.textContent = activeTerm.year + " \u2022 " + activeTerm.semester;
       }
 
-      // Wire up filter controls if present
-      var yearBtn = document.querySelector(".assignment-year-filter.active");
-      var filterYear = yearBtn ? yearBtn.getAttribute("data-year") : "all";
-      var semEl = document.getElementById("assignments-semester-filter");
-      var filterSem = semEl ? semEl.value : "all";
-
-      document.querySelectorAll(".assignment-year-filter").forEach(function (btn) {
-        if (!btn._ccBound) {
-          btn._ccBound = true;
-          btn.addEventListener("click", function () {
-            document.querySelectorAll(".assignment-year-filter").forEach(function (b) { b.classList.remove("active"); });
-            btn.classList.add("active");
-            loadAssignments();
-          });
-        }
-      });
-      if (semEl && !semEl._ccBound) {
-        semEl._ccBound = true;
-        semEl.addEventListener("change", function () {
-          loadAssignments();
-        });
-      }
+      var activeYear = activeTerm ? normalizeYearName(activeTerm.year) : "";
+      var activeSem = activeTerm ? normalizeSemName(activeTerm.semester) : "";
 
       var filtered = assignments.filter(function (item) {
-        var aYear = item.year || "";
+        var aYear = item.year || item.year_level || "";
         var aSem = item.semester || "";
         if (!aYear || !aSem) {
           var matchedSubj = allSubjects.find(function (s) {
@@ -5726,10 +5753,19 @@ function getRemoteSession() {
             if (!aSem) aSem = matchedSubj.semester || "";
           }
         }
-        var matchY = (filterYear === "all" || !aYear || normalizeYearName(aYear) === normalizeYearName(filterYear));
-        var matchS = (filterSem === "all" || !aSem || normalizeSemName(aSem) === normalizeSemName(filterSem));
-        return matchY && matchS;
+        if (activeYear && activeYear !== "All Years" && aYear) {
+          if (normalizeYearName(aYear) !== activeYear) return false;
+        }
+        if (activeSem && activeSem !== "All Semesters" && aSem) {
+          if (normalizeSemName(aSem) !== activeSem) return false;
+        }
+        return true;
       });
+
+      // If no assignments matched the strict term filter, fallback to all assignments so user never loses tasks
+      if (filtered.length === 0 && assignments.length > 0) {
+        filtered = assignments;
+      }
 
       list.innerHTML = "";
       if (filtered.length === 0) {
